@@ -1,59 +1,158 @@
 import streamlit as st
 import pandas as pd
-import sqlite3
+from sqlalchemy import create_engine, text
+import bcrypt
 import re
 import io
 from datetime import datetime
 
+# ==========================================
+# 1. CONFIGURAÇÃO DA PÁGINA E VARIÁVEIS
+# ==========================================
 st.set_page_config(
-    page_title="NOC FMT - Backlog & Gestão Operacional",
+    page_title="NOC FMT - Command Center",
     page_icon="📡",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-# ==========================================
-# 1. BANCO DE DADOS LOCAL (CRC E QUADRANTES)
-# ==========================================
-def init_db():
-    conn = sqlite3.connect("crc_database.db")
-    cursor = conn.cursor()
-    
-    # Tabela Histórico CRC (versão base sem aging)
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS crc_historico (
-            tsk TEXT PRIMARY KEY,
-            ne_id TEXT,
-            end_id TEXT,
-            status TEXT,
-            descricao TEXT,
-            data_atualizacao TEXT
-        )
-    """)
-    
-    # Tenta adicionar a coluna aging caso a tabela seja a versão antiga
-    try:
-        cursor.execute("ALTER TABLE crc_historico ADD COLUMN aging TEXT")
-    except sqlite3.OperationalError:
-        pass # Se der erro, significa que a coluna aging já existe, então ignoramos e seguimos.
+# Inicializa sessão de autenticação e memória dos dataframes
+if 'logged_in' not in st.session_state:
+    st.session_state['logged_in'] = False
+if 'username' not in st.session_state:
+    st.session_state['username'] = ''
+if 'is_admin' not in st.session_state:
+    st.session_state['is_admin'] = False
+if "df_fmt_consolidado" not in st.session_state:
+    st.session_state.df_fmt_consolidado = pd.DataFrame()
+if "df_fmt_previous" not in st.session_state:
+    st.session_state.df_fmt_previous = pd.DataFrame() 
+if "df_b2b_consolidado" not in st.session_state:
+    st.session_state.df_b2b_consolidado = pd.DataFrame()
+if "df_movel_consolidado" not in st.session_state:
+    st.session_state.df_movel_consolidado = pd.DataFrame()
 
-    # Tabela Base Fixa de Quadrantes
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS quadrantes (
-            end_id TEXT PRIMARY KEY,
-            quadrante TEXT
-        )
-    """)
-    conn.commit()
-    conn.close()
+# ==========================================
+# 2. CONEXÃO COM O BANCO EM NUVEM OU LOCAL
+# ==========================================
+# Tenta conectar na nuvem (Neon.tech). Se der erro, cria um banco local de segurança.
+try:
+    DB_URL = st.secrets["database"]["url"]
+    engine = create_engine(DB_URL)
+except Exception as e:
+    engine = create_engine("sqlite:///crc_database.db")
+
+def init_cloud_db():
+    with engine.connect() as conn:
+        conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS usuarios_equipe (
+                username VARCHAR(50) PRIMARY KEY,
+                password_hash VARCHAR(255) NOT NULL,
+                nome_completo VARCHAR(100),
+                cargo VARCHAR(50)
+            )
+        """))
+        conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS quadrantes (
+                end_id VARCHAR(50) PRIMARY KEY,
+                quadrante VARCHAR(50)
+            )
+        """))
+        conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS crc_historico (
+                tsk VARCHAR(50) PRIMARY KEY,
+                ne_id VARCHAR(100),
+                end_id VARCHAR(100),
+                status VARCHAR(50),
+                aging VARCHAR(50),
+                descricao TEXT,
+                data_atualizacao VARCHAR(50)
+            )
+        """))
+        conn.commit()
+
+init_cloud_db()
+
+# ==========================================
+# 3. SISTEMA DE AUTENTICAÇÃO E LOGIN
+# ==========================================
+def verify_login(username, password):
+    try:
+        admin_user = st.secrets["admin"]["username"]
+        admin_pass = st.secrets["admin"]["password"]
+        if username == admin_user and password == admin_pass:
+            return True, True
+    except:
+        # Conta de fallback caso o secrets.toml ainda não tenha sido criado
+        if username == "admin" and password == "admin":
+            return True, True
+            
+    with engine.connect() as conn:
+        result = conn.execute(text("SELECT password_hash FROM usuarios_equipe WHERE username = :u"), {"u": username}).fetchone()
+        if result:
+            stored_hash = result[0].encode('utf-8') if isinstance(result[0], str) else result[0]
+            if bcrypt.checkpw(password.encode('utf-8'), stored_hash):
+                return True, False
+    return False, False
+
+if not st.session_state['logged_in']:
+    st.markdown("<h1 style='text-align: center; color: #1E3A8A;'>📡 NOC FMT Login</h1>", unsafe_allow_html=True)
+    st.markdown("---")
+    
+    col_l1, col_l2, col_l3 = st.columns([1, 1, 1])
+    with col_l2:
+        with st.form("login_form"):
+            st.write("Insira suas credenciais corporativas")
+            user_input = st.text_input("Usuário")
+            pass_input = st.text_input("Senha", type="password")
+            submitted = st.form_submit_button("Entrar no Sistema", use_container_width=True)
+            
+            if submitted:
+                if not user_input or not pass_input:
+                    st.warning("Preencha todos os campos.")
+                else:
+                    auth_ok, is_admin = verify_login(user_input, pass_input)
+                    if auth_ok:
+                        st.session_state['logged_in'] = True
+                        st.session_state['username'] = user_input
+                        st.session_state['is_admin'] = is_admin
+                        st.rerun()
+                    else:
+                        st.error("Usuário ou senha incorretos.")
+    st.stop()
+
+# ==========================================
+# 4. FUNÇÕES DE BANCO DE DADOS
+# ==========================================
+def upsert_quadrantes(df_quad):
+    col_end = next((c for c in df_quad.columns if "END" in str(c).upper()), df_quad.columns[0])
+    col_q_val = next((c for c in df_quad.columns if any(k in str(c).upper() for k in ["QD", "QUADRANTE", "ANF"])), df_quad.columns[-1])
+    novos, at = 0, 0
+    with engine.connect() as conn:
+        for _, row in df_quad.iterrows():
+            end_val = str(row.get(col_end, "")).strip().upper()
+            quad_val = str(row.get(col_q_val, "")).strip().upper()
+            if not end_val or end_val == "NAN": continue
+            
+            exists = conn.execute(text("SELECT end_id FROM quadrantes WHERE end_id = :e"), {"e": end_val}).fetchone()
+            if exists:
+                conn.execute(text("UPDATE quadrantes SET quadrante = :q WHERE end_id = :e"), {"q": quad_val, "e": end_val})
+                at += 1
+            else:
+                conn.execute(text("INSERT INTO quadrantes (end_id, quadrante) VALUES (:e, :q)"), {"e": end_val, "q": quad_val})
+                novos += 1
+        conn.commit()
+    return novos, at
+
+def get_quadrantes_map():
+    with engine.connect() as conn:
+        df = pd.read_sql_query("SELECT * FROM quadrantes", conn)
+    if df.empty: return {}
+    return dict(zip(df['end_id'], df['quadrante']))
 
 def upsert_crc(df_crc):
-    conn = sqlite3.connect("crc_database.db")
-    cursor = conn.cursor()
-    
     cols = [str(c).upper().strip() for c in df_crc.columns]
     df_crc.columns = cols
-    
     col_tsk = next((c for c in cols if any(k in c for k in ["NUMERO", "NÚMERO", "TSK", "CHAMADO", "ORDEM"])), cols[0])
     col_ne = next((c for c in cols if "NE" in c), cols[min(1, len(cols)-1)])
     col_end = next((c for c in cols if "END" in c), cols[min(2, len(cols)-1)])
@@ -62,94 +161,46 @@ def upsert_crc(df_crc):
     
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     novos, atualizados = 0, 0
-    
-    for _, row in df_crc.iterrows():
-        tsk_val = str(row.get(col_tsk, "")).strip()
-        if not tsk_val or tsk_val.lower() in ["nan", "none", ""]:
-            continue
+    with engine.connect() as conn:
+        for _, row in df_crc.iterrows():
+            tsk_val = str(row.get(col_tsk, "")).strip()
+            if not tsk_val or tsk_val.lower() in ["nan", "none", ""]: continue
+            ne_val = str(row.get(col_ne, ""))
+            end_val = str(row.get(col_end, ""))
+            st_val = str(row.get(col_status, ""))
+            aging_val = str(row.get(col_aging, "")) if col_aging else ""
             
-        ne_val = str(row.get(col_ne, ""))
-        end_val = str(row.get(col_end, ""))
-        st_val = str(row.get(col_status, ""))
-        aging_val = str(row.get(col_aging, "")) if col_aging else ""
-        
-        cursor.execute("SELECT tsk FROM crc_historico WHERE tsk = ?", (tsk_val,))
-        if cursor.fetchone():
-            cursor.execute("""
-                UPDATE crc_historico 
-                SET ne_id = ?, end_id = ?, status = ?, aging = ?, data_atualizacao = ?
-                WHERE tsk = ?
-            """, (ne_val, end_val, st_val, aging_val, now, tsk_val))
-            atualizados += 1
-        else:
-            cursor.execute("""
-                INSERT INTO crc_historico (tsk, ne_id, end_id, status, aging, descricao, data_atualizacao)
-                VALUES (?, ?, ?, ?, ?, '', ?)
-            """, (tsk_val, ne_val, end_val, st_val, aging_val, now))
-            novos += 1
-            
-    conn.commit()
-    conn.close()
+            exists = conn.execute(text("SELECT tsk FROM crc_historico WHERE tsk = :t"), {"t": tsk_val}).fetchone()
+            if exists:
+                conn.execute(text("""
+                    UPDATE crc_historico SET ne_id=:n, end_id=:e, status=:s, aging=:a, data_atualizacao=:d WHERE tsk=:t
+                """), {"n": ne_val, "e": end_val, "s": st_val, "a": aging_val, "d": now, "t": tsk_val})
+                atualizados += 1
+            else:
+                conn.execute(text("""
+                    INSERT INTO crc_historico (tsk, ne_id, end_id, status, aging, descricao, data_atualizacao)
+                    VALUES (:t, :n, :e, :s, :a, '', :d)
+                """), {"t": tsk_val, "n": ne_val, "e": end_val, "s": st_val, "a": aging_val, "d": now})
+                novos += 1
+        conn.commit()
     return novos, atualizados
 
 def get_crc_data():
-    conn = sqlite3.connect("crc_database.db")
-    df = pd.read_sql_query("SELECT * FROM crc_historico", conn)
-    conn.close()
+    with engine.connect() as conn:
+        df = pd.read_sql_query("SELECT * FROM crc_historico", conn)
     return df
 
-def upsert_quadrantes(df_quad):
-    conn = sqlite3.connect("crc_database.db")
-    cursor = conn.cursor()
-    
-    col_end = next((c for c in df_quad.columns if "END" in str(c).upper()), df_quad.columns[0])
-    col_q_val = next((c for c in df_quad.columns if any(k in str(c).upper() for k in ["QD", "QUADRANTE", "ANF"])), df_quad.columns[-1])
-    
-    novos, atualizados = 0, 0
-    for _, row in df_quad.iterrows():
-        end_val = str(row.get(col_end, "")).strip().upper()
-        quad_val = str(row.get(col_q_val, "")).strip().upper()
-        
-        if not end_val or end_val == "NAN" or end_val == "NONE":
-            continue
-            
-        cursor.execute("SELECT end_id FROM quadrantes WHERE end_id = ?", (end_val,))
-        if cursor.fetchone():
-            cursor.execute("UPDATE quadrantes SET quadrante = ? WHERE end_id = ?", (quad_val, end_val))
-            atualizados += 1
-        else:
-            cursor.execute("INSERT INTO quadrantes (end_id, quadrante) VALUES (?, ?)", (end_val, quad_val))
-            novos += 1
-            
-    conn.commit()
-    conn.close()
-    return novos, atualizados
-
-def get_quadrantes_map():
-    conn = sqlite3.connect("crc_database.db")
-    df = pd.read_sql_query("SELECT * FROM quadrantes", conn)
-    conn.close()
-    if df.empty:
-        return {}
-    return dict(zip(df['end_id'], df['quadrante']))
-
-init_db()
-
 # ==========================================
-# 2. FUNÇÕES AUXILIARES DE PROCESSAMENTO
+# 5. FUNÇÕES AUXILIARES DE PROCESSAMENTO
 # ==========================================
 def load_file(file, target_sheet_hints=None):
-    if file is None:
-        return pd.DataFrame()
-    
+    if file is None: return pd.DataFrame()
     if file.name.endswith(".csv"):
         content = file.getvalue().decode('utf-8', errors='ignore')
         lines = content.splitlines()
         skip = 1 if len(lines) > 0 and "sep=" in lines[0].lower() else 0
-        try:
-            df = pd.read_csv(io.StringIO(content), skiprows=skip, sep=None, engine='python')
-        except:
-            df = pd.read_csv(io.StringIO(content), skiprows=skip, sep=';', engine='python')
+        try: df = pd.read_csv(io.StringIO(content), skiprows=skip, sep=None, engine='python')
+        except: df = pd.read_csv(io.StringIO(content), skiprows=skip, sep=';', engine='python')
     else:
         xls = pd.ExcelFile(file)
         sheet_to_load = xls.sheet_names[0]
@@ -159,7 +210,6 @@ def load_file(file, target_sheet_hints=None):
                     sheet_to_load = s
                     break
         df = pd.read_excel(xls, sheet_name=sheet_to_load)
-        
         if str(df.columns[0]).startswith("Unnamed:") and len(df) > 0:
             for idx in range(min(10, len(df))):
                 row_vals = [str(x).upper() for x in df.iloc[idx].values]
@@ -170,31 +220,16 @@ def load_file(file, target_sheet_hints=None):
     return df
 
 def get_single_series(df, col_name_hints, fallback_val=""):
-    col_found = None
-    for hint in col_name_hints:
-        match = next((c for c in df.columns if hint in str(c).upper().strip()), None)
-        if match:
-            col_found = match
-            break
-            
-    if not col_found:
-        return pd.Series([fallback_val] * len(df), index=df.index, dtype=str)
-        
-    extracted = df[col_found]
-    if isinstance(extracted, pd.DataFrame):
-        return extracted.iloc[:, 0].fillna("").astype(str)
-    return extracted.fillna("").astype(str)
+    col_found = next((c for hint in col_name_hints for c in df.columns if hint in str(c).upper().strip()), None)
+    if not col_found: return pd.Series([fallback_val] * len(df), index=df.index, dtype=str)
+    return df[col_found].iloc[:, 0].fillna("").astype(str) if isinstance(df[col_found], pd.DataFrame) else df[col_found].fillna("").astype(str)
 
 def categorize_status(st_str):
     s = str(st_str).upper()
-    if any(k in s for k in ["ACIONADO", "NOTIFICADO", "ENCAMINHADO"]):
-        return "Acionado"
-    elif any(k in s for k in ["INICIADO", "ANDAMENTO", "CAMPO", "ATENDIMENTO", "EM ATENDIMENTO"]):
-        return "Iniciado"
-    elif any(k in s for k in ["TRAMITADO", "AGUARDANDO", "PAUSA", "TERCEIRO", "PENDENTE", "ESCALONADO"]):
-        return "Tramitado"
-    elif any(k in s for k in ["ENCERRADO", "CONCLUIDO", "CANCELADO", "FECHADO", "RESOLVIDO"]):
-        return "Encerrado"
+    if any(k in s for k in ["ACIONADO", "NOTIFICADO", "ENCAMINHADO"]): return "Acionado"
+    elif any(k in s for k in ["INICIADO", "ANDAMENTO", "CAMPO", "ATENDIMENTO"]): return "Iniciado"
+    elif any(k in s for k in ["TRAMITADO", "AGUARDANDO", "PAUSA", "TERCEIRO", "PENDENTE"]): return "Tramitado"
+    elif any(k in s for k in ["ENCERRADO", "CONCLUIDO", "CANCELADO", "RESOLVIDO"]): return "Encerrado"
     return "Não Acionado"
 
 def get_status_counts(sub_df, status_col="STATUS"):
@@ -217,45 +252,82 @@ def calculate_tempo_chamado(row):
             diff = datetime.now() - dt
             days = diff.days
             hours, remainder = divmod(diff.seconds, 3600)
-            minutes, _ = divmod(remainder, 60)
-            return f"{days}d {hours:02d}h {minutes:02d}m"
-        except:
-            pass
+            mins, _ = divmod(remainder, 60)
+            return f"{days}d {hours:02d}h {mins:02d}m"
+        except: pass
     ag_val = str(row.get("AGING", "")).strip()
     return ag_val if ag_val and ag_val not in ["nan", "None"] else "0d 00h"
 
 # ==========================================
-# 3. INTERFACE E MENU
+# 6. MENUS DA BARRA LATERAL
 # ==========================================
-st.sidebar.title("📡 NOC FMT Command Center")
-menu = st.sidebar.radio(
-    "Navegação",
-    [
-        "📥 Upload & Processamento",
-        "📂 Backlog Operacional (Fixa)",
-        "📱 Backlog Móvel",
-        "🔄 Handover (Entrantes/Saintes)",
-        "💼 Gestão B2B",
-        "📺 Apresentação Executiva",
-        "📊 Métricas & Trâmites",
-        "📋 Base Geral FMT",
-        "🗄️ Histórico CRC"
-    ]
-)
+st.sidebar.title(f"📡 NOC FMT")
+st.sidebar.markdown(f"**Usuário Logado:** `{st.session_state['username']}`")
+if st.sidebar.button("Sair (Logout)"):
+    st.session_state['logged_in'] = False
+    st.session_state['is_admin'] = False
+    st.rerun()
 
-if "df_fmt_consolidado" not in st.session_state:
-    st.session_state.df_fmt_consolidado = pd.DataFrame()
-if "df_fmt_previous" not in st.session_state:
-    st.session_state.df_fmt_previous = pd.DataFrame() 
-if "df_b2b_consolidado" not in st.session_state:
-    st.session_state.df_b2b_consolidado = pd.DataFrame()
-if "df_movel_consolidado" not in st.session_state:
-    st.session_state.df_movel_consolidado = pd.DataFrame()
+st.sidebar.markdown("---")
+abas_disponiveis = [
+    "📥 Upload & Processamento",
+    "📂 Backlog Operacional (Fixa)",
+    "📱 Backlog Móvel",
+    "🔄 Handover (Entrantes/Saintes)",
+    "💼 Gestão B2B",
+    "📺 Apresentação Executiva",
+    "📊 Métricas & Trâmites",
+    "📋 Base Geral FMT",
+    "🗄️ Histórico CRC"
+]
+
+if st.session_state['is_admin']:
+    abas_disponiveis.insert(0, "👤 Gestão de Usuários (Admin)")
+
+menu = st.sidebar.radio("Navegação", abas_disponiveis)
 
 # ==========================================
-# ABA 1: UPLOAD & CRUZAMENTO
+# ABA: GESTÃO DE USUÁRIOS (SÓ ADMIN)
 # ==========================================
-if menu == "📥 Upload & Processamento":
+if menu == "👤 Gestão de Usuários (Admin)":
+    st.title("👤 Gerenciamento de Acessos da Equipe")
+    st.caption("Apenas a conta Master tem acesso a esta área.")
+
+    with st.expander("➕ Cadastrar Novo Usuário", expanded=True):
+        with st.form("add_user_form"):
+            new_user = st.text_input("Usuário de login (Ex: wesley.noc)")
+            new_name = st.text_input("Nome Completo")
+            new_role = st.selectbox("Cargo", ["Técnico NOC", "Coordenador", "Analista", "Supervisor"])
+            new_pass = st.text_input("Senha", type="password")
+            
+            if st.form_submit_button("Cadastrar Usuário"):
+                if not new_user or not new_pass:
+                    st.error("Usuário e senha são obrigatórios.")
+                else:
+                    hashed_pw = bcrypt.hashpw(new_pass.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+                    with engine.connect() as conn:
+                        try:
+                            conn.execute(text("""
+                                INSERT INTO usuarios_equipe (username, password_hash, nome_completo, cargo) 
+                                VALUES (:u, :p, :n, :c)
+                            """), {"u": new_user, "p": hashed_pw, "n": new_name, "c": new_role})
+                            conn.commit()
+                            st.success(f"Usuário {new_user} criado com sucesso!")
+                        except Exception as e:
+                            st.error("Erro: Esse nome de usuário já existe.")
+
+    st.subheader("Lista de Usuários Cadastrados")
+    with engine.connect() as conn:
+        df_users = pd.read_sql_query("SELECT username, nome_completo, cargo FROM usuarios_equipe", conn)
+    if not df_users.empty:
+        st.dataframe(df_users, use_container_width=True)
+    else:
+        st.info("Nenhum técnico cadastrado ainda.")
+
+# ==========================================
+# ABA: UPLOAD & PROCESSAMENTO
+# ==========================================
+elif menu == "📥 Upload & Processamento":
     st.title("📥 Ingestão, Cruzamento e Regras de Negócio")
     st.caption("Faça upload das bases reais. O sistema irá ler as colunas, processar Anéis e DWDM.")
 
@@ -263,32 +335,34 @@ if menu == "📥 Upload & Processamento":
     with col1:
         st.subheader("Bases Operacionais")
         f_fmt = st.file_uploader("1. Base Fixa FMT (Ex: u_task_evento)", type=["xlsx", "csv"])
-        f_fmmt = st.file_uploader("2. Base Total FMMT (Para cruzamento Anel)", type=["xlsx", "csv"])
-        f_b2b = st.file_uploader("3. Base B2B (Corporativo)", type=["xlsx", "csv"])
-        f_movel_backlog = st.file_uploader("4. Base Apenas Móvel (Backlog Dedicado)", type=["xlsx", "csv"])
+        f_fmmt = st.file_uploader("2. Base Móvel FMMT (Para Anel)", type=["xlsx", "csv"])
+        f_movel_backlog = st.file_uploader("3. Base Móvel (Backlog Dedicado)", type=["xlsx", "csv"])
+        f_b2b = st.file_uploader("4. Base B2B (Corporativo)", type=["xlsx", "csv"])
 
     with col2:
         st.subheader("Bases de Apoio & Correlação")
         f_grafana = st.file_uploader("5. Base Grafana (Alarmes CSV)", type=["xlsx", "csv"])
-        f_quadrantes = st.file_uploader("6. Base de Quadrantes (Permanente / Suba apenas uma vez)", type=["xlsx", "csv"])
+        f_quadrantes = st.file_uploader("6. Base Quadrantes (Suba só 1 vez)", type=["xlsx", "csv"])
         f_crc = st.file_uploader("7. Base CRC (Histórico)", type=["xlsx", "csv"])
 
     if st.button("🚀 Processar e Integrar Todas as Bases", type="primary", use_container_width=True):
-        with st.spinner("Lendo planilhas, mapeando colunas e cruzando dados..."):
-            
-            # 1. PROCESSAMENTO DA BASE FIXA FMT E CRUZAMENTOS
-            if f_fmt:
+        if not f_fmt:
+            st.error("A Base Total Fixa FMT é obrigatória.")
+        else:
+            with st.spinner("Lendo planilhas, mapeando colunas e cruzando dados..."):
+                
+                # 1. PROCESSAMENTO DA BASE FIXA
                 df_fmt_raw = load_file(f_fmt, ["BACKLOG", "FMT", "TASK", "EVENTO"])
-                df_fmmt = load_file(f_fmmt, ["FMMT", "MOVEL"]) if f_fmmt else pd.DataFrame()
-                df_graf = load_file(f_grafana, ["GRAFANA", "ANEIS", "ALARMES"]) if f_grafana else pd.DataFrame()
+                df_graf_raw = load_file(f_graf, ["GRAFANA", "ANEIS", "ALARMES"]) if f_graf else pd.DataFrame()
 
-                # Processar novos Quadrantes no Banco de Dados se foi feito o upload
+                # Processar novos Quadrantes se foi feito o upload
                 if f_quadrantes:
                     df_quad_raw = load_file(f_quadrantes, ["QUAD", "QD", "ANF"])
                     if not df_quad_raw.empty:
                         novos_q, at_q = upsert_quadrantes(df_quad_raw)
-                        st.success(f"✅ Base de Quadrantes Atualizada: {novos_q} novos adicionados e {at_q} atualizados.")
+                        st.success(f"✅ Base de Quadrantes Atualizada no Banco: {novos_q} novos, {at_q} atualizados.")
 
+                # Extrai colunas da Fixa
                 s_tsk = get_single_series(df_fmt_raw, ["NÚMERO", "NUMERO", "TSK", "CHAMADO", "ORDEM"], "")
                 s_end_id = get_single_series(df_fmt_raw, ["END ID", "END_ID", "SITE"], "")
                 s_ne_id = get_single_series(df_fmt_raw, ["NE ID DO EVENTO", "NE ID", "NENAME"], "")
@@ -318,7 +392,7 @@ if menu == "📥 Upload & Processamento":
                     "OBS": s_obs
                 })
 
-                # Mapeamento de Quadrantes usando o Banco de Dados Permanente
+                # Mapeamento de Quadrantes usando o Banco
                 quad_map = get_quadrantes_map()
                 df_fmt["QUADRANTE"] = df_fmt["END_ID"].astype(str).str.strip().str.upper().map(quad_map)
                 df_fmt["QUADRANTE"] = df_fmt["QUADRANTE"].fillna(
@@ -327,18 +401,14 @@ if menu == "📥 Upload & Processamento":
 
                 df_fmt["TEMPO_DO_CHAMADO"] = df_fmt.apply(calculate_tempo_chamado, axis=1)
 
-                graf_full_text = " | ".join(str(val).upper().strip() for val in df_graf.values.flatten() if pd.notna(val)) if not df_graf.empty else ""
+                graf_full_text = " | ".join(str(val).upper().strip() for val in df_graf_raw.values.flatten() if pd.notna(val)) if not df_graf_raw.empty else ""
 
                 def check_anel_grafana(row):
-                    if not graf_full_text:
-                        return "NÃO"
+                    if not graf_full_text: return "NÃO"
                     ne = str(row.get("NE_ID", "")).strip().upper()
                     end = str(row.get("END_ID", "")).strip().upper()
-
-                    if ne and len(ne) >= 5 and ne in graf_full_text:
-                        return "SIM"
-                    if end and len(end) >= 5 and end in graf_full_text:
-                        return "SIM"
+                    if ne and len(ne) >= 5 and ne in graf_full_text: return "SIM"
+                    if end and len(end) >= 5 and end in graf_full_text: return "SIM"
                     return "NÃO"
 
                 df_fmt["ANEL_ABERTO"] = df_fmt.apply(check_anel_grafana, axis=1)
@@ -348,86 +418,85 @@ if menu == "📥 Upload & Processamento":
 
                 st.session_state.df_fmt_consolidado = df_fmt
                 aneis_count = (df_fmt["ANEL_ABERTO"] == "SIM").sum()
-                st.success(f"✅ Base Fixa: {len(df_fmt)} registros lidos. Encontrados {aneis_count} Anéis Abertos cruzando com Grafana.")
+                st.success(f"✅ Base Fixa: {len(df_fmt)} registros lidos. {aneis_count} Anéis Abertos cruzados com Grafana.")
 
-            # 2. PROCESSAMENTO DO CRC
-            if f_crc:
-                df_crc_raw = load_file(f_crc, ["CRC"])
-                novos, at = upsert_crc(df_crc_raw)
-                st.success(f"✅ Base CRC: {novos} novos chamados adicionados e {at} atualizados no histórico.")
-                
-            # Atualiza a base fixa com CRC do banco
-            if not st.session_state.df_fmt_consolidado.empty:
+                # 2. PROCESSAMENTO DO CRC
+                if f_crc:
+                    df_crc_raw = load_file(f_crc, ["CRC"])
+                    novos_c, at_c = upsert_crc(df_crc_raw)
+                    st.success(f"✅ Base CRC: {novos_c} novos chamados adicionados e {at_c} atualizados no histórico.")
+                    
                 df_crc_db = get_crc_data()
-                crc_tsks = set(df_crc_db["tsk"].dropna().astype(str).str.strip())
-                st.session_state.df_fmt_consolidado["IS_CRC"] = st.session_state.df_fmt_consolidado["TSK"].astype(str).str.strip().apply(lambda x: "SIM" if x in crc_tsks else "NÃO")
+                crc_tsks = set(df_crc_db["tsk"].dropna().astype(str).str.strip().str.upper()) if not df_crc_db.empty else set()
+                st.session_state.df_fmt_consolidado["IS_CRC"] = st.session_state.df_fmt_consolidado["TSK"].astype(str).str.strip().str.upper().apply(lambda x: "SIM" if x in crc_tsks else "NÃO")
 
-            # 3. PROCESSAMENTO DA BASE B2B
-            if f_b2b:
-                df_b2b_raw = load_file(f_b2b, ["B2B", "CORPORATIVO"])
-                s_b2b_tsk = get_single_series(df_b2b_raw, ["NÚMERO", "NUMERO", "TSK", "CHAMADO", "ORDEM"], "")
-                s_b2b_end = get_single_series(df_b2b_raw, ["END ID", "END_ID", "SITE"], "")
-                s_b2b_ne = get_single_series(df_b2b_raw, ["NE ID DO EVENTO", "NE ID", "NENAME"], "")
-                s_b2b_status = get_single_series(df_b2b_raw, ["STATUS"], "Não Acionado")
-                s_b2b_falha = get_single_series(df_b2b_raw, ["ALARME", "FALHA"], "")
-                s_b2b_aging = get_single_series(df_b2b_raw, ["AGING"], "-")
-                s_b2b_cria = get_single_series(df_b2b_raw, ["DATA DE CRIAÇÃO", "DATA_CRIACAO", "CRIA"], "")
-                s_b2b_tec = get_single_series(df_b2b_raw, ["NOME DO TÉCNICO", "NOME TÉCNICO CAMPO", "TÉCNICO", "TECNICO"], "")
-                s_b2b_res = get_single_series(df_b2b_raw, ["RESUMO", "OBSERVAÇÕES"], "")
-                s_b2b_obs = get_single_series(df_b2b_raw, ["OBS", "NOTAS"], "")
+                # 3. PROCESSAMENTO DA BASE B2B
+                if f_b2b:
+                    df_b2b_raw = load_file(f_b2b, ["B2B", "CORPORATIVO"])
+                    s_b2b_tsk = get_single_series(df_b2b_raw, ["NÚMERO", "NUMERO", "TSK", "CHAMADO", "ORDEM"], "")
+                    s_b2b_end = get_single_series(df_b2b_raw, ["END ID", "END_ID", "SITE"], "")
+                    s_b2b_ne = get_single_series(df_b2b_raw, ["NE ID DO EVENTO", "NE ID", "NENAME"], "")
+                    s_b2b_status = get_single_series(df_b2b_raw, ["STATUS"], "Não Acionado")
+                    s_b2b_falha = get_single_series(df_b2b_raw, ["ALARME", "FALHA"], "")
+                    s_b2b_aging = get_single_series(df_b2b_raw, ["AGING"], "-")
+                    s_b2b_cria = get_single_series(df_b2b_raw, ["DATA DE CRIAÇÃO", "DATA_CRIACAO", "CRIA"], "")
+                    s_b2b_tec = get_single_series(df_b2b_raw, ["NOME DO TÉCNICO", "NOME TÉCNICO CAMPO", "TÉCNICO", "TECNICO"], "")
+                    s_b2b_res = get_single_series(df_b2b_raw, ["RESUMO", "OBSERVAÇÕES"], "")
+                    s_b2b_obs = get_single_series(df_b2b_raw, ["OBS", "NOTAS"], "")
 
-                df_b2b_proc = pd.DataFrame({
-                    "TSK": s_b2b_tsk,
-                    "END_ID": s_b2b_end,
-                    "NE_ID": s_b2b_ne,
-                    "FALHA": s_b2b_falha,
-                    "AGING": s_b2b_aging,
-                    "DATA_CRIACAO": s_b2b_cria,
-                    "STATUS": s_b2b_status.apply(categorize_status),
-                    "RESUMO": s_b2b_res.apply(lambda r: "Em Campo" if "CAMPO" in str(r).upper() else ("Tramitado" if "TRAMITADO" in str(r).upper() else ("Encerrado" if "ENCERRADO" in str(r).upper() else str(r)))),
-                    "TECNICO": s_b2b_tec,
-                    "OBS": s_b2b_obs
-                })
-                df_b2b_proc["TEMPO_DO_CHAMADO"] = df_b2b_proc.apply(calculate_tempo_chamado, axis=1)
-                st.session_state.df_b2b_consolidado = df_b2b_proc
-                st.success(f"✅ Base B2B: {len(df_b2b_proc)} registros lidos.")
-                
-                if not st.session_state.df_fmt_consolidado.empty:
+                    df_b2b_proc = pd.DataFrame({
+                        "TSK": s_b2b_tsk,
+                        "END_ID": s_b2b_end,
+                        "NE_ID": s_b2b_ne,
+                        "FALHA": s_b2b_falha,
+                        "AGING": s_b2b_aging,
+                        "DATA_CRIACAO": s_b2b_cria,
+                        "STATUS": s_b2b_status.apply(categorize_status),
+                        "RESUMO": s_b2b_res.apply(lambda r: "Em Campo" if "CAMPO" in str(r).upper() else ("Tramitado" if "TRAMITADO" in str(r).upper() else ("Encerrado" if "ENCERRADO" in str(r).upper() else str(r)))),
+                        "TECNICO": s_b2b_tec,
+                        "OBS": s_b2b_obs
+                    })
+                    df_b2b_proc["TEMPO_DO_CHAMADO"] = df_b2b_proc.apply(calculate_tempo_chamado, axis=1)
+                    st.session_state.df_b2b_consolidado = df_b2b_proc
+                    st.success(f"✅ Base B2B: {len(df_b2b_proc)} registros lidos.")
+                    
                     b2b_tokens = set(df_b2b_proc["TSK"].dropna().astype(str).str.strip().str.upper()).union(set(df_b2b_proc["NE_ID"].dropna().astype(str).str.strip().str.upper()))
                     st.session_state.df_fmt_consolidado["IS_B2B"] = st.session_state.df_fmt_consolidado.apply(lambda r: "SIM" if str(r["TSK"]).upper() in b2b_tokens or str(r["NE_ID"]).upper() in b2b_tokens else "NÃO", axis=1)
+                else:
+                    st.session_state.df_fmt_consolidado["IS_B2B"] = "NÃO"
 
-            # 4. PROCESSAMENTO DA BASE MÓVEL (BACKLOG DEDICADO)
-            if f_movel_backlog:
-                df_movel_raw = load_file(f_movel_backlog, ["MOVEL", "MOBILE", "BACKLOG"])
-                s_tsk_m = get_single_series(df_movel_raw, ["NÚMERO", "NUMERO", "TSK", "CHAMADO", "ORDEM"], "")
-                s_end_m = get_single_series(df_movel_raw, ["END ID", "END_ID", "SITE"], "")
-                s_ne_m = get_single_series(df_movel_raw, ["NE ID DO EVENTO", "NE ID", "NENAME"], "")
-                s_status_m = get_single_series(df_movel_raw, ["STATUS"], "Não Acionado")
-                s_falha_m = get_single_series(df_movel_raw, ["ALARME", "FALHA"], "")
-                s_aging_m = get_single_series(df_movel_raw, ["AGING"], "-")
-                s_cria_m = get_single_series(df_movel_raw, ["DATA DE CRIAÇÃO", "DATA_CRIACAO", "CRIA"], "")
-                s_tec_m = get_single_series(df_movel_raw, ["NOME DO TÉCNICO", "NOME TÉCNICO CAMPO", "TÉCNICO", "TECNICO", "RESPONSÁVEL"], "")
-                s_resumo_m = get_single_series(df_movel_raw, ["RESUMO", "OBSERVAÇÕES"], "")
-                s_obs_m = get_single_series(df_movel_raw, ["OBS", "NOTAS"], "")
+                # 4. PROCESSAMENTO DA BASE MÓVEL (BACKLOG)
+                if f_movel_backlog:
+                    df_movel_raw = load_file(f_movel_backlog, ["MOVEL", "MOBILE", "BACKLOG"])
+                    s_tsk_m = get_single_series(df_movel_raw, ["NÚMERO", "NUMERO", "TSK", "CHAMADO", "ORDEM"], "")
+                    s_end_m = get_single_series(df_movel_raw, ["END ID", "END_ID", "SITE"], "")
+                    s_ne_m = get_single_series(df_movel_raw, ["NE ID DO EVENTO", "NE ID", "NENAME"], "")
+                    s_status_m = get_single_series(df_movel_raw, ["STATUS"], "Não Acionado")
+                    s_falha_m = get_single_series(df_movel_raw, ["ALARME", "FALHA"], "")
+                    s_aging_m = get_single_series(df_movel_raw, ["AGING"], "-")
+                    s_cria_m = get_single_series(df_movel_raw, ["DATA DE CRIAÇÃO", "DATA_CRIACAO", "CRIA"], "")
+                    s_tec_m = get_single_series(df_movel_raw, ["NOME DO TÉCNICO", "NOME TÉCNICO CAMPO", "TÉCNICO", "TECNICO", "RESPONSÁVEL"], "")
+                    s_resumo_m = get_single_series(df_movel_raw, ["RESUMO", "OBSERVAÇÕES"], "")
+                    s_obs_m = get_single_series(df_movel_raw, ["OBS", "NOTAS"], "")
 
-                df_movel = pd.DataFrame({
-                    "TSK": s_tsk_m,
-                    "END_ID": s_end_m,
-                    "NE_ID": s_ne_m,
-                    "FALHA": s_falha_m,
-                    "AGING": s_aging_m,
-                    "DATA_CRIACAO": s_cria_m,
-                    "STATUS": s_status_m.apply(categorize_status),
-                    "RESUMO": s_resumo_m.apply(lambda r: "Em Campo" if "CAMPO" in str(r).upper() else ("Tramitado" if "TRAMITADO" in str(r).upper() else ("Encerrado" if "ENCERRADO" in str(r).upper() else str(r)))),
-                    "TECNICO": s_tec_m,
-                    "OBS": s_obs_m
-                })
-                df_movel["TEMPO_DO_CHAMADO"] = df_movel.apply(calculate_tempo_chamado, axis=1)
-                st.session_state.df_movel_consolidado = df_movel
-                st.success(f"✅ Base Móvel (Backlog): {len(df_movel)} registros lidos.")
+                    df_movel = pd.DataFrame({
+                        "TSK": s_tsk_m,
+                        "END_ID": s_end_m,
+                        "NE_ID": s_ne_m,
+                        "FALHA": s_falha_m,
+                        "AGING": s_aging_m,
+                        "DATA_CRIACAO": s_cria_m,
+                        "STATUS": s_status_m.apply(categorize_status),
+                        "RESUMO": s_resumo_m.apply(lambda r: "Em Campo" if "CAMPO" in str(r).upper() else ("Tramitado" if "TRAMITADO" in str(r).upper() else ("Encerrado" if "ENCERRADO" in str(r).upper() else str(r)))),
+                        "TECNICO": s_tec_m,
+                        "OBS": s_obs_m
+                    })
+                    df_movel["TEMPO_DO_CHAMADO"] = df_movel.apply(calculate_tempo_chamado, axis=1)
+                    st.session_state.df_movel_consolidado = df_movel
+                    st.success(f"✅ Base Móvel (Backlog): {len(df_movel)} registros lidos.")
 
 # ==========================================
-# ABA 2: BACKLOG OPERACIONAL (FIXA)
+# ABA 4: BACKLOG OPERACIONAL (FIXA)
 # ==========================================
 elif menu == "📂 Backlog Operacional (Fixa)":
     st.title("📂 Backlog Operacional (Rede Fixa)")
@@ -438,9 +507,8 @@ elif menu == "📂 Backlog Operacional (Fixa)":
     if df.empty:
         st.warning("Nenhuma base carregada. Realize o upload na primeira aba.")
     else:
-        for c in ["DWDM", "ANEL_ABERTO", "IS_B2B", "IS_CRC"]:
-            if c not in df.columns:
-                df[c] = "NÃO"
+        for c in ["DWDM", "ANEL_ABERTO", "IS_B2B", "IS_CRC", "QUADRANTE"]:
+            if c not in df.columns: df[c] = "NÃO"
 
         cols_backlog = ["TSK", "END_ID", "NE_ID", "TEMPO_DO_CHAMADO", "AGING", "FALHA", "STATUS", "OBS", "RESUMO", "TECNICO", "DWDM", "ANEL_ABERTO", "IS_CRC", "QUADRANTE"]
 
@@ -477,16 +545,9 @@ elif menu == "📂 Backlog Operacional (Fixa)":
             "TEMPO_DO_CHAMADO": st.column_config.TextColumn("DOWNTIME", disabled=True),
             "AGING": st.column_config.TextColumn("AGING", disabled=True),
             "FALHA": st.column_config.TextColumn("FALHA", disabled=True),
-            "STATUS": st.column_config.SelectboxColumn(
-                "Status",
-                options=["Iniciado", "Acionado", "Encerrado", "Tramitado", "Não Acionado"],
-                required=True
-            ),
+            "STATUS": st.column_config.SelectboxColumn("Status", options=["Iniciado", "Acionado", "Encerrado", "Tramitado", "Não Acionado"], required=True),
             "OBS": st.column_config.TextColumn("Obs.:", width="large"),
-            "RESUMO": st.column_config.SelectboxColumn(
-                "RESUMO",
-                options=["Em Campo", "Tramitado", "Encerrado", "Em Análise", "Acionado", "Outros"]
-            ),
+            "RESUMO": st.column_config.SelectboxColumn("RESUMO", options=["Em Campo", "Tramitado", "Encerrado", "Em Análise", "Acionado", "Outros"]),
             "TECNICO": st.column_config.TextColumn("TÉCNICO"),
             "DWDM": st.column_config.TextColumn("TIPO NE", disabled=True),
             "ANEL_ABERTO": st.column_config.TextColumn("ANEL", disabled=True),
@@ -494,13 +555,7 @@ elif menu == "📂 Backlog Operacional (Fixa)":
             "QUADRANTE": st.column_config.TextColumn("QDRs", disabled=True),
         }
 
-        edited_bk = st.data_editor(
-            df_bk_view[cols_backlog],
-            column_config=column_config,
-            use_container_width=True,
-            height=560,
-            key="backlog_editor_unique"
-        )
+        edited_bk = st.data_editor(df_bk_view[cols_backlog], column_config=column_config, use_container_width=True, height=560, key="backlog_editor_unique")
 
         col_b1, col_b2 = st.columns([1, 4])
         with col_b1:
@@ -514,23 +569,17 @@ elif menu == "📂 Backlog Operacional (Fixa)":
                             df_global.loc[idx, field] = row[field]
 
                 st.session_state.df_fmt_consolidado = df_global
-                st.success("✅ Backlog Fixa atualizado com sucesso!")
+                st.success(f"✅ Backlog Fixa atualizado por {st.session_state['username']}!")
                 st.rerun()
 
         with col_b2:
             output = io.BytesIO()
             with pd.ExcelWriter(output, engine="openpyxl") as writer:
                 df_bk_view[cols_backlog].to_excel(writer, index=False, sheet_name="Backlog_Fixa")
-            excel_data = output.getvalue()
-            st.download_button(
-                label="📥 Baixar Backlog Fixa em Excel (.xlsx)",
-                data=excel_data,
-                file_name=f"Backlog_Fixa_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            )
+            st.download_button("📥 Baixar Backlog Fixa em Excel (.xlsx)", data=output.getvalue(), file_name=f"Backlog_Fixa_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
 # ==========================================
-# ABA 3: BACKLOG MÓVEL
+# ABA 5: BACKLOG MÓVEL
 # ==========================================
 elif menu == "📱 Backlog Móvel":
     st.title("📱 Backlog Móvel")
@@ -539,7 +588,7 @@ elif menu == "📱 Backlog Móvel":
     df_movel = st.session_state.df_movel_consolidado
 
     if df_movel.empty:
-        st.warning("Nenhuma base Móvel carregada. Faça o upload na primeira aba (Opção 4).")
+        st.warning("Nenhuma base Móvel carregada. Faça o upload na primeira aba (Opção 3 ou 4).")
     else:
         stats_movel = get_status_counts(df_movel, status_col="STATUS")
         m1, m2, m3, m4, m5 = st.columns(5)
@@ -577,26 +626,13 @@ elif menu == "📱 Backlog Móvel":
             "TEMPO_DO_CHAMADO": st.column_config.TextColumn("Tempo Chamado", disabled=True),
             "AGING": st.column_config.TextColumn("Aging", disabled=True),
             "FALHA": st.column_config.TextColumn("Falha", disabled=True),
-            "STATUS": st.column_config.SelectboxColumn(
-                "Status",
-                options=["Iniciado", "Acionado", "Encerrado", "Tramitado", "Não Acionado"],
-                required=True
-            ),
-            "RESUMO": st.column_config.SelectboxColumn(
-                "Resumo",
-                options=["Em Campo", "Tramitado", "Encerrado", "Em Análise", "Acionado", "Outros"]
-            ),
+            "STATUS": st.column_config.SelectboxColumn("Status", options=["Iniciado", "Acionado", "Encerrado", "Tramitado", "Não Acionado"], required=True),
+            "RESUMO": st.column_config.SelectboxColumn("Resumo", options=["Em Campo", "Tramitado", "Encerrado", "Em Análise", "Acionado", "Outros"]),
             "TECNICO": st.column_config.TextColumn("Técnico Responsável"),
             "OBS": st.column_config.TextColumn("Observações / Trâmites", width="large"),
         }
 
-        edited_movel = st.data_editor(
-            df_movel_view[cols_movel],
-            column_config=column_config_movel,
-            use_container_width=True,
-            height=500,
-            key="movel_editor_unique"
-        )
+        edited_movel = st.data_editor(df_movel_view[cols_movel], column_config=column_config_movel, use_container_width=True, height=500, key="movel_editor_unique")
 
         col_save_m1, col_save_m2 = st.columns([1, 4])
         with col_save_m1:
@@ -610,23 +646,17 @@ elif menu == "📱 Backlog Móvel":
                             df_global_movel.loc[idx, field] = row[field]
 
                 st.session_state.df_movel_consolidado = df_global_movel
-                st.success("✅ Base Móvel salva com sucesso!")
+                st.success(f"✅ Base Móvel salva por {st.session_state['username']}!")
                 st.rerun()
 
         with col_save_m2:
             output_movel = io.BytesIO()
             with pd.ExcelWriter(output_movel, engine="openpyxl") as writer:
                 df_movel_view[cols_movel].to_excel(writer, index=False, sheet_name="Backlog_Movel")
-            excel_data_movel = output_movel.getvalue()
-            st.download_button(
-                label="📥 Baixar Backlog Móvel em Excel (.xlsx)",
-                data=excel_data_movel,
-                file_name=f"Backlog_Movel_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            )
+            st.download_button("📥 Baixar Backlog Móvel em Excel (.xlsx)", data=output_movel.getvalue(), file_name=f"Backlog_Movel_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
 # ==========================================
-# ABA 4: HANDOVER (SAINTES E ENTRANTES)
+# ABA 6: HANDOVER (SAINTES E ENTRANTES)
 # ==========================================
 elif menu == "🔄 Handover (Entrantes/Saintes)":
     st.title("🔄 Handover Operacional")
@@ -676,7 +706,7 @@ elif menu == "🔄 Handover (Entrantes/Saintes)":
                 st.info("Nenhum chamado saiu da base desde a última atualização.")
 
 # ==========================================
-# ABA 5: GESTÃO B2B
+# ABA 7: GESTÃO B2B
 # ==========================================
 elif menu == "💼 Gestão B2B":
     st.title("💼 Gestão B2B (Corporativo)")
@@ -722,26 +752,13 @@ elif menu == "💼 Gestão B2B":
             "NE_ID": st.column_config.TextColumn("NE ID", disabled=True),
             "END_ID": st.column_config.TextColumn("END ID", disabled=True),
             "FALHA": st.column_config.TextColumn("Falha", disabled=True),
-            "STATUS": st.column_config.SelectboxColumn(
-                "Status",
-                options=["Iniciado", "Acionado", "Encerrado", "Tramitado", "Não Acionado"],
-                required=True
-            ),
-            "RESUMO": st.column_config.SelectboxColumn(
-                "Resumo",
-                options=["Em Campo", "Tramitado", "Encerrado", "Em Análise", "Acionado", "Outros"]
-            ),
+            "STATUS": st.column_config.SelectboxColumn("Status", options=["Iniciado", "Acionado", "Encerrado", "Tramitado", "Não Acionado"], required=True),
+            "RESUMO": st.column_config.SelectboxColumn("Resumo", options=["Em Campo", "Tramitado", "Encerrado", "Em Análise", "Acionado", "Outros"]),
             "TECNICO": st.column_config.TextColumn("Técnico Responsável"),
             "OBS": st.column_config.TextColumn("Observações / Trâmites", width="large"),
         }
 
-        edited_b2b = st.data_editor(
-            df_b2b_view[cols_b2b],
-            column_config=column_config_b2b,
-            use_container_width=True,
-            height=500,
-            key="b2b_editor_unique"
-        )
+        edited_b2b = st.data_editor(df_b2b_view[cols_b2b], column_config=column_config_b2b, use_container_width=True, height=500, key="b2b_editor_unique")
 
         col_save_b1, col_save_b2 = st.columns([1, 4])
         with col_save_b1:
@@ -762,16 +779,10 @@ elif menu == "💼 Gestão B2B":
             output_b2b = io.BytesIO()
             with pd.ExcelWriter(output_b2b, engine="openpyxl") as writer:
                 df_b2b_view[cols_b2b].to_excel(writer, index=False, sheet_name="B2B_Operacao")
-            excel_data_b2b = output_b2b.getvalue()
-            st.download_button(
-                label="📥 Baixar Base B2B em Excel (.xlsx)",
-                data=excel_data_b2b,
-                file_name=f"B2B_Operacao_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            )
+            st.download_button("📥 Baixar Base B2B em Excel (.xlsx)", data=output_b2b.getvalue(), file_name=f"B2B_Operacao_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
 # ==========================================
-# ABA 6: APRESENTAÇÃO EXECUTIVA
+# ABA 8: APRESENTAÇÃO EXECUTIVA
 # ==========================================
 elif menu == "📺 Apresentação Executiva":
     st.title("📺 Apresentação Executiva - Painel NOC FMT")
@@ -831,7 +842,7 @@ elif menu == "📺 Apresentação Executiva":
         render_presentation_card("Casos Histórico CRC", "🟢", df_crc_view)
 
 # ==========================================
-# ABA 7: MÉTRICAS & TRÂMITES
+# ABA 9: MÉTRICAS & TRÂMITES
 # ==========================================
 elif menu == "📊 Métricas & Trâmites":
     st.title("📊 Resumo Geral de Trâmites & Pipeline Operacional")
@@ -862,7 +873,7 @@ elif menu == "📊 Métricas & Trâmites":
                 st.bar_chart(df["STATUS"].value_counts())
 
 # ==========================================
-# ABA 8: BASE GERAL FMT
+# ABA 10: BASE GERAL FMT
 # ==========================================
 elif menu == "📋 Base Geral FMT":
     st.title("📋 Base Geral de Equipamentos FMT")
@@ -898,11 +909,11 @@ elif menu == "📋 Base Geral FMT":
         st.download_button("📥 Baixar Base Filtrada (CSV)", data=csv, file_name="equipamentos_fmt_completo.csv", mime="text/csv")
 
 # ==========================================
-# ABA 9: HISTÓRICO CRC
+# ABA 11: HISTÓRICO CRC
 # ==========================================
 elif menu == "🗄️ Histórico CRC":
     st.title("🗄️ Base Cumulativa CRC")
-    st.caption("Esta base é gravada de forma incremental e nunca é deletada nos uploads.")
+    st.caption("Esta base é gravada de forma permanente no banco de dados na nuvem.")
 
     df_crc_view = get_crc_data()
     st.metric("Total de Registros Armazenados no Histórico CRC", len(df_crc_view))
