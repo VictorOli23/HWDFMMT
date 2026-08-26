@@ -372,7 +372,7 @@ elif menu == "📥 Upload & Processamento":
                 # Extrai colunas da Fixa
                 s_tsk = get_single_series(df_fmt_raw, ["NÚMERO", "NUMERO", "TSK", "CHAMADO", "ORDEM"], "")
                 s_end_id = get_single_series(df_fmt_raw, ["END ID", "END_ID", "SITE"], "")
-                s_ne_id = get_single_series(df_fmt_raw, ["NE ID DO EVENTO", "NE ID", "NENAME", "NENAME"], "")
+                s_ne_id = get_single_series(df_fmt_raw, ["NE ID DO EVENTO", "NE ID", "NENAME"], "")
                 s_tipo_equip = get_single_series(df_fmt_raw, ["TIPO DO EQUIPAMENTO", "TIPO NE", "EQUIPAMENTO"], "")
                 s_status_raw = get_single_series(df_fmt_raw, ["STATUS"], "Não Acionado")
                 s_falha = get_single_series(df_fmt_raw, ["ALARME", "FALHA"], "")
@@ -412,15 +412,10 @@ elif menu == "📥 Upload & Processamento":
                 # EXATO PROCV / CORRESP (EXATAMENTE COMO A SUA FÓRMULA SMART)
                 # ==========================================================
                 smart_set = set()
-                if not fmmt_raw := df_fmmt:
-                    pass
-                
                 if not df_fmmt.empty:
-                    # Tenta achar a coluna equivalente ao "NE ID Descrição" da sua fórmula
                     col_smart_ne = next((c for c in df_fmmt.columns if any(k in str(c).upper() for k in ["NE ID", "NENAME", "DESCRICAO", "ELEMENTO"])), df_fmmt.columns[0])
                     smart_set = set(df_fmmt[col_smart_ne].dropna().astype(str).str.strip().str.upper())
 
-                # Se houver base Grafana, junta os IDs válidos dela também
                 if not df_graf_raw.empty:
                     col_graf_ne = next((c for c in df_graf_raw.columns if any(k in str(c).upper() for k in ["NE ID", "NENAME", "ELEMENTO"])), df_graf_raw.columns[0])
                     smart_set.update(df_graf_raw[col_graf_ne].dropna().astype(str).str.strip().str.upper())
@@ -433,7 +428,6 @@ elif menu == "📥 Upload & Processamento":
                     if ne in ["NAN", "NONE", "NULL", "", "-"]: ne = None
                     if end in ["NAN", "NONE", "NULL", "", "-"]: end = None
 
-                    # Equivalente ao CORRESP: se achar o NE ID exato na base SMART, retorna SIM
                     if ne and ne in smart_set: return "SIM"
                     if end and end in smart_set: return "SIM"
                     return "NÃO"
@@ -868,7 +862,7 @@ elif menu == "📺 Apresentação Executiva":
 
         # 2. Anéis Abertos
         df_aneis = df_view[df_view["ANEL_ABERTO"] == "SIM"]
-        render_presentation_card("Anéis Abertos (Cruzamento FMMT x FMT)", "🔴", df_aneis)
+        render_presentation_card("Anéis Abertos (Cruzamento SMART x FMT)", "🔴", df_aneis)
         st.divider()
 
         # 3. B2B
