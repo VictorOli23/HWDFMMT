@@ -364,7 +364,7 @@ elif menu == "📥 Upload & Processamento":
                 
                 # 1. PROCESSAMENTO DA BASE FIXA
                 df_fmt_raw = load_file(f_fmt, ["BACKLOG", "FMT", "TASK", "EVENTO"])
-                df_graf_raw = load_file(f_graf, ["GRAFANA", "ANEIS", "ALARMES"]) if f_graf else pd.DataFrame()
+                df_graf_raw = load_file(f_grafana, ["GRAFANA", "ANEIS", "ALARMES"]) if f_grafana else pd.DataFrame()
 
                 # Processar novos Quadrantes se foi feito o upload
                 if f_quadrantes:
