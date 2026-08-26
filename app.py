@@ -346,9 +346,6 @@ elif menu == "📥 Upload & Processamento":
     st.title("📥 Ingestão, Cruzamento e Regras de Negócio")
     st.caption("Faça upload das bases reais. O sistema enviará tudo diretamente para a Nuvem de forma global.")
 
-    # ==========================================
-    # PAINEL DE STATUS DAS BASES NA NUVEM
-    # ==========================================
     st.markdown("### 📊 Status Atual das Bases na Nuvem")
     
     df_fixa_check = load_table("backlog_fixa")
@@ -461,20 +458,24 @@ elif menu == "📥 Upload & Processamento":
                 df_fmt["TEMPO_DO_CHAMADO"] = df_fmt.apply(calculate_tempo_chamado, axis=1)
 
                 # ==========================================================
-                # EXATO PROCV / CORRESP (IDÊNTICO À FÓRMULA SMART)
+                # PROCV EXATO RIGOROSO (CORRESP)
                 # ==========================================================
                 smart_set = set()
                 if not df_fmmt.empty:
-                    col_smart_ne = next((c for c in df_fmmt.columns if any(k in str(c).upper() for k in ["NE ID", "NENAME", "DESCRICAO", "ELEMENTO"])), df_fmmt.columns[0])
+                    df_fmmt.columns = [str(c).upper().strip() for c in df_fmmt.columns]
+                    col_smart_ne = next((c for c in df_fmmt.columns if any(k in c for k in ["NE ID", "NENAME", "DESCRICAO", "ELEMENTO"])), df_fmmt.columns[0])
                     smart_set = set(df_fmmt[col_smart_ne].dropna().astype(str).str.strip().str.upper())
 
                 if not df_graf_raw.empty:
-                    col_graf_ne = next((c for c in df_graf_raw.columns if any(k in str(c).upper() for k in ["NE ID", "NENAME", "ELEMENTO"])), df_graf_raw.columns[0])
+                    df_graf_raw.columns = [str(c).upper().strip() for c in df_graf_raw.columns]
+                    col_graf_ne = next((c for c in df_graf_raw.columns if any(k in c for k in ["NE ID", "NENAME", "ELEMENTO"])), df_graf_raw.columns[0])
                     smart_set.update(df_graf_raw[col_graf_ne].dropna().astype(str).str.strip().str.upper())
 
+                # Limpeza rigorosa de lixos para evitar falsos positivos
                 smart_set.discard("")
                 smart_set.discard("NAN")
                 smart_set.discard("NONE")
+                smart_set.discard("NULL")
                 smart_set.discard("-")
 
                 def check_anel_smart(row):
@@ -485,6 +486,7 @@ elif menu == "📥 Upload & Processamento":
                     if ne in ["NAN", "NONE", "NULL", "", "-"]: ne = None
                     if end in ["NAN", "NONE", "NULL", "", "-"]: end = None
 
+                    # O PROCV só dá SIM se o ID bater perfeitamente com a lista da SMART
                     if ne and ne in smart_set: return "SIM"
                     if end and end in smart_set: return "SIM"
                     return "NÃO"
