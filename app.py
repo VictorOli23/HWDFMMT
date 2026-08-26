@@ -17,7 +17,6 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Inicializa sessão de autenticação
 if 'logged_in' not in st.session_state:
     st.session_state['logged_in'] = False
 if 'username' not in st.session_state:
@@ -69,7 +68,6 @@ def init_cloud_db():
 
 init_cloud_db()
 
-# Função para carregar as tabelas do Backlog de forma global
 def load_table(table_name):
     try:
         with engine.connect() as conn:
@@ -337,19 +335,19 @@ if menu == "👤 Gestão de Usuários (Admin)":
 # ==========================================
 elif menu == "📥 Upload & Processamento":
     st.title("📥 Ingestão, Cruzamento e Regras de Negócio")
-    st.caption("Faça upload das bases reais. O sistema enviará tudo diretamente para a Nuvem de forma global.")
+    st.caption("Faça upload das bases reais. O cruzamento de anéis agora utiliza PROCV exato (equivalente à sua base SMART).")
 
     col1, col2 = st.columns(2)
     with col1:
         st.subheader("Bases Operacionais")
         f_fmt = st.file_uploader("1. Base Fixa FMT (Ex: u_task_evento)", type=["xlsx", "csv"])
-        f_fmmt = st.file_uploader("2. Base Móvel FMMT (Anéis)", type=["xlsx", "csv"])
+        f_fmmt = st.file_uploader("2. Base Móvel FMMT (Base SMART / Anéis)", type=["xlsx", "csv"])
         f_movel_backlog = st.file_uploader("3. Base Móvel (Backlog Dedicado)", type=["xlsx", "csv"])
         f_b2b = st.file_uploader("4. Base B2B (Corporativo)", type=["xlsx", "csv"])
 
     with col2:
         st.subheader("Bases de Apoio & Correlação")
-        f_grafana = st.file_uploader("5. Base Grafana (Alarmes Anéis)", type=["xlsx", "csv"])
+        f_grafana = st.file_uploader("5. Base Grafana (Opcional)", type=["xlsx", "csv"])
         f_quadrantes = st.file_uploader("6. Base Quadrantes (Suba só 1 vez)", type=["xlsx", "csv"])
         f_crc = st.file_uploader("7. Base CRC (Histórico)", type=["xlsx", "csv"])
 
@@ -357,11 +355,11 @@ elif menu == "📥 Upload & Processamento":
         if not f_fmt:
             st.error("A Base Total Fixa FMT é obrigatória.")
         else:
-            with st.spinner("Lendo planilhas, mapeando colunas e enviando tudo para o Banco de Dados..."):
+            with st.spinner("Lendo planilhas, mapeando colunas e cruzando dados com PROCV exato..."):
                 
                 # 1. PROCESSAMENTO DA BASE FIXA E CRUZAMENTOS
                 df_fmt_raw = load_file(f_fmt, ["BACKLOG", "FMT", "TASK", "EVENTO"])
-                df_fmmt = load_file(f_fmmt, ["FMMT", "MOVEL"]) if f_fmmt else pd.DataFrame()
+                df_fmmt = load_file(f_fmmt, ["FMMT", "MOVEL", "SMART"]) if f_fmmt else pd.DataFrame()
                 df_graf_raw = load_file(f_grafana, ["GRAFANA", "ANEIS", "ALARMES"]) if f_grafana else pd.DataFrame()
 
                 # Processar novos Quadrantes se foi feito o upload
@@ -374,7 +372,7 @@ elif menu == "📥 Upload & Processamento":
                 # Extrai colunas da Fixa
                 s_tsk = get_single_series(df_fmt_raw, ["NÚMERO", "NUMERO", "TSK", "CHAMADO", "ORDEM"], "")
                 s_end_id = get_single_series(df_fmt_raw, ["END ID", "END_ID", "SITE"], "")
-                s_ne_id = get_single_series(df_fmt_raw, ["NE ID DO EVENTO", "NE ID", "NENAME"], "")
+                s_ne_id = get_single_series(df_fmt_raw, ["NE ID DO EVENTO", "NE ID", "NENAME", "NENAME"], "")
                 s_tipo_equip = get_single_series(df_fmt_raw, ["TIPO DO EQUIPAMENTO", "TIPO NE", "EQUIPAMENTO"], "")
                 s_status_raw = get_single_series(df_fmt_raw, ["STATUS"], "Não Acionado")
                 s_falha = get_single_series(df_fmt_raw, ["ALARME", "FALHA"], "")
@@ -410,24 +408,37 @@ elif menu == "📥 Upload & Processamento":
 
                 df_fmt["TEMPO_DO_CHAMADO"] = df_fmt.apply(calculate_tempo_chamado, axis=1)
 
-                # Cruzamento Exato Grafana X FMT
-                if not df_graf_raw.empty:
-                    graf_text_raw = " ".join(str(val).upper() for val in df_graf_raw.values.flatten() if pd.notna(val))
-                    graf_full_text = re.sub(r'[|;/,-]', ' ', graf_text_raw)
-                else:
-                    graf_full_text = ""
+                # ==========================================================
+                # EXATO PROCV / CORRESP (EXATAMENTE COMO A SUA FÓRMULA SMART)
+                # ==========================================================
+                smart_set = set()
+                if not fmmt_raw := df_fmmt:
+                    pass
+                
+                if not df_fmmt.empty:
+                    # Tenta achar a coluna equivalente ao "NE ID Descrição" da sua fórmula
+                    col_smart_ne = next((c for c in df_fmmt.columns if any(k in str(c).upper() for k in ["NE ID", "NENAME", "DESCRICAO", "ELEMENTO"])), df_fmmt.columns[0])
+                    smart_set = set(df_fmmt[col_smart_ne].dropna().astype(str).str.strip().str.upper())
 
-                def check_anel_grafana(row):
-                    if not graf_full_text: return "NÃO"
+                # Se houver base Grafana, junta os IDs válidos dela também
+                if not df_graf_raw.empty:
+                    col_graf_ne = next((c for c in df_graf_raw.columns if any(k in str(c).upper() for k in ["NE ID", "NENAME", "ELEMENTO"])), df_graf_raw.columns[0])
+                    smart_set.update(df_graf_raw[col_graf_ne].dropna().astype(str).str.strip().str.upper())
+
+                def check_anel_smart(row):
+                    if not smart_set: return "NÃO"
                     ne = str(row.get("NE_ID", "")).strip().upper()
                     end = str(row.get("END_ID", "")).strip().upper()
+                    
                     if ne in ["NAN", "NONE", "NULL", "", "-"]: ne = None
                     if end in ["NAN", "NONE", "NULL", "", "-"]: end = None
-                    if ne and len(ne) >= 4 and f" {ne} " in f" {graf_full_text} ": return "SIM"
-                    if end and len(end) >= 4 and f" {end} " in f" {graf_full_text} ": return "SIM"
+
+                    # Equivalente ao CORRESP: se achar o NE ID exato na base SMART, retorna SIM
+                    if ne and ne in smart_set: return "SIM"
+                    if end and end in smart_set: return "SIM"
                     return "NÃO"
 
-                df_fmt["ANEL_ABERTO"] = df_fmt.apply(check_anel_grafana, axis=1)
+                df_fmt["ANEL_ABERTO"] = df_fmt.apply(check_anel_smart, axis=1)
 
                 # Processamento do Histórico CRC para Cruzamento
                 if f_crc:
@@ -448,11 +459,11 @@ elif menu == "📥 Upload & Processamento":
                         conn.execute(text("CREATE TABLE backlog_fixa_previous AS SELECT * FROM backlog_fixa"))
                         conn.commit()
                 except:
-                    pass # Se falhar é porque a tabela original não existia ainda
+                    pass
                 
                 df_fmt.to_sql('backlog_fixa', engine, if_exists='replace', index=False)
                 aneis_count = (df_fmt["ANEL_ABERTO"] == "SIM").sum()
-                st.success(f"✅ Base Fixa Enviada para a Nuvem: {len(df_fmt)} registros. {aneis_count} Anéis Abertos.")
+                st.success(f"✅ Base Fixa Enviada para a Nuvem: {len(df_fmt)} registros. PROCV de Anéis identificou: {aneis_count} casos.")
 
                 # ==========================================================
                 # SALVA A BASE B2B NA NUVEM E CRUZA COM FIXA
@@ -480,7 +491,6 @@ elif menu == "📥 Upload & Processamento":
                     df_b2b_proc.to_sql('backlog_b2b', engine, if_exists='replace', index=False)
                     st.success(f"✅ Base B2B Enviada para a Nuvem: {len(df_b2b_proc)} registros lidos.")
                     
-                    # Atualiza o cruzamento de B2B dentro da Fixa na Nuvem
                     df_fmt_atual = load_table('backlog_fixa')
                     b2b_tokens = set(df_b2b_proc["TSK"].dropna().astype(str).str.strip().str.upper()).union(set(df_b2b_proc["NE_ID"].dropna().astype(str).str.strip().str.upper()))
                     df_fmt_atual["IS_B2B"] = df_fmt_atual.apply(lambda r: "SIM" if str(r["TSK"]).upper() in b2b_tokens or str(r["NE_ID"]).upper() in b2b_tokens else "NÃO", axis=1)
@@ -858,7 +868,7 @@ elif menu == "📺 Apresentação Executiva":
 
         # 2. Anéis Abertos
         df_aneis = df_view[df_view["ANEL_ABERTO"] == "SIM"]
-        render_presentation_card("Anéis Abertos (Cruzamento Grafana x FMT)", "🔴", df_aneis)
+        render_presentation_card("Anéis Abertos (Cruzamento FMMT x FMT)", "🔴", df_aneis)
         st.divider()
 
         # 3. B2B
