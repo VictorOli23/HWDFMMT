@@ -18,18 +18,25 @@ st.set_page_config(
 def init_db():
     conn = sqlite3.connect("crc_database.db")
     cursor = conn.cursor()
-    # Tabela Histórico CRC
+    
+    # Tabela Histórico CRC (versão base sem aging)
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS crc_historico (
             tsk TEXT PRIMARY KEY,
             ne_id TEXT,
             end_id TEXT,
             status TEXT,
-            aging TEXT,
             descricao TEXT,
             data_atualizacao TEXT
         )
     """)
+    
+    # Tenta adicionar a coluna aging caso a tabela seja a versão antiga
+    try:
+        cursor.execute("ALTER TABLE crc_historico ADD COLUMN aging TEXT")
+    except sqlite3.OperationalError:
+        pass # Se der erro, significa que a coluna aging já existe, então ignoramos e seguimos.
+
     # Tabela Base Fixa de Quadrantes
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS quadrantes (
