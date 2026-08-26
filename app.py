@@ -4,6 +4,7 @@ from sqlalchemy import create_engine, text
 import bcrypt
 import re
 import io
+import os
 from datetime import datetime
 
 # ==========================================
@@ -35,12 +36,16 @@ if "df_movel_consolidado" not in st.session_state:
 # ==========================================
 # 2. CONEXÃO COM O BANCO EM NUVEM OU LOCAL
 # ==========================================
-# Tenta conectar na nuvem (Neon.tech). Se der erro, cria um banco local de segurança.
-try:
-    DB_URL = st.secrets["database"]["url"]
-    engine = create_engine(DB_URL)
-except Exception as e:
-    engine = create_engine("sqlite:///crc_database.db")
+# Lê direto do painel do Render as variáveis de ambiente
+DB_URL = os.environ.get("DB_URL")
+
+if not DB_URL:
+    try:
+        DB_URL = st.secrets["database"]["url"]
+    except:
+        DB_URL = "sqlite:///crc_database.db"
+
+engine = create_engine(DB_URL)
 
 def init_cloud_db():
     with engine.connect() as conn:
@@ -77,16 +82,22 @@ init_cloud_db()
 # 3. SISTEMA DE AUTENTICAÇÃO E LOGIN
 # ==========================================
 def verify_login(username, password):
-    try:
-        admin_user = st.secrets["admin"]["username"]
-        admin_pass = st.secrets["admin"]["password"]
-        if username == admin_user and password == admin_pass:
-            return True, True
-    except:
-        # Conta de fallback caso o secrets.toml ainda não tenha sido criado
-        if username == "admin" and password == "admin":
-            return True, True
+    # Puxa o admin das variáveis de ambiente do Render
+    admin_user = os.environ.get("ADMIN_USER")
+    admin_pass = os.environ.get("ADMIN_PASS")
+    
+    # Fallbacks de segurança
+    if not admin_user:
+        try:
+            admin_user = st.secrets["admin"]["username"]
+            admin_pass = st.secrets["admin"]["password"]
+        except:
+            admin_user = "admin"
+            admin_pass = "admin"
             
+    if username == admin_user and password == admin_pass:
+        return True, True
+    
     with engine.connect() as conn:
         result = conn.execute(text("SELECT password_hash FROM usuarios_equipe WHERE username = :u"), {"u": username}).fetchone()
         if result:
