@@ -201,7 +201,7 @@ def load_file(file, target_sheet_hints=None):
         content = file.getvalue().decode('utf-8', errors='ignore')
         lines = content.splitlines()
         
-        # AQUI ESTÁ A CORREÇÃO DO GRAFANA: IGNORA LIXO E CARACTERES INVISÍVEIS (BOM)
+        # REMOVE TODOS OS CARACTERES INVISÍVEIS DO GRAFANA
         clean_lines = [l for l in lines if "sep=" not in l.lower()[:10]]
         clean_content = "\n".join(clean_lines)
         
@@ -223,7 +223,6 @@ def load_file(file, target_sheet_hints=None):
                     break
         df = pd.read_excel(xls, sheet_name=sheet_to_load)
         
-        # Corrige colunas zoadas
         if len(df) > 0 and any(str(c).startswith("Unnamed") for c in df.columns[:3]):
             for idx in range(min(15, len(df))):
                 row_vals = [str(x).upper() for x in df.iloc[idx].values]
@@ -320,8 +319,9 @@ if menu == "👤 Gestão de Usuários (Admin)":
 # ABA: UPLOAD & PROCESSAMENTO
 # ==========================================
 elif menu == "📥 Upload & Processamento":
-    st.title("📥 Ingestão e Cruzamento de Anéis")
-    
+    st.title("📥 Ingestão, Cruzamento e Regras de Negócio")
+    st.caption("O cruzamento agora elimina lixos invisíveis e executa o Duplo PROCV (Nome OU Evento) perfeitamente.")
+
     st.markdown("### 📊 Status Atual das Bases na Nuvem")
     df_fixa_check = load_table("backlog_fixa")
     df_fmmt_check = load_table("backlog_fmmt")
@@ -369,7 +369,7 @@ elif menu == "📥 Upload & Processamento":
         if not f_fmt:
             st.error("A Base Total Fixa FMT é obrigatória.")
         else:
-            with st.spinner("Analisando planilhas e executando o PROCV Universal..."):
+            with st.spinner("Analisando planilhas e executando o Duplo PROCV..."):
                 
                 df_fmt_raw = load_file(f_fmt, ["BACKLOG", "FMT", "TASK", "EVENTO"])
                 
@@ -422,29 +422,34 @@ elif menu == "📥 Upload & Processamento":
                 # ==========================================================
                 # OMNI-SEARCH UNIVERSAL (CONTRA NOMES E EVENTOS)
                 # ==========================================================
-                global_pool = set()
+                global_names = set()
+                global_events = set()
                 
                 df_graf_cloud = load_table("backlog_grafana")
                 if not df_graf_cloud.empty:
-                    for col in df_graf_cloud.columns:
-                        global_pool.update(df_graf_cloud[col].dropna().astype(str).str.strip().str.upper())
+                    global_names.update(df_graf_cloud.get('NEName', pd.Series()).dropna().astype(str).str.strip().str.upper())
+                    global_events.update(df_graf_cloud.get('ictTTid', pd.Series()).dropna().astype(str).str.strip().str.upper())
 
                 df_fmmt_cloud = load_table("backlog_fmmt")
                 if not df_fmmt_cloud.empty:
-                    for col in df_fmmt_cloud.columns:
-                        global_pool.update(df_fmmt_cloud[col].dropna().astype(str).str.strip().str.upper())
+                    col_fmmt_ne = next((c for c in df_fmmt_cloud.columns if any(k in str(c).upper() for k in ["NE ID", "NENAME", "DESCRICAO"])), None)
+                    col_fmmt_eve = next((c for c in df_fmmt_cloud.columns if any(k in str(c).upper() for k in ["EVENTO", "ICTTTID", "INCIDENTE"])), None)
+                    if col_fmmt_ne: global_names.update(df_fmmt_cloud[col_fmmt_ne].dropna().astype(str).str.strip().str.upper())
+                    if col_fmmt_eve: global_events.update(df_fmmt_cloud[col_fmmt_eve].dropna().astype(str).str.strip().str.upper())
 
                 lixos = ["", "NAN", "NONE", "NULL", "-", "ROUTER", "SWITCH", "SIM", "NÃO"]
-                for lx in lixos: global_pool.discard(lx)
+                for lx in lixos: 
+                    global_names.discard(lx)
+                    global_events.discard(lx)
 
                 def check_anel_omni_search(row):
-                    if not global_pool: return "NÃO"
+                    if not global_names and not global_events: return "NÃO"
                     
                     ne_fmt = str(row.get("NE_ID", "")).strip().upper()
                     ev_fmt = str(row.get("EVENTO", "")).strip().upper()
                     
-                    if len(ev_fmt) >= 5 and ev_fmt in global_pool: return "SIM"
-                    if len(ne_fmt) >= 5 and ne_fmt in global_pool: return "SIM"
+                    if len(ev_fmt) >= 5 and ev_fmt in global_events: return "SIM"
+                    if len(ne_fmt) >= 5 and ne_fmt in global_names: return "SIM"
                     return "NÃO"
 
                 df_fmt["ANEL_ABERTO"] = df_fmt.apply(check_anel_omni_search, axis=1)
@@ -462,7 +467,7 @@ elif menu == "📥 Upload & Processamento":
                 
                 df_fmt.to_sql('backlog_fixa', engine, if_exists='replace', index=False)
                 aneis_count = (df_fmt["ANEL_ABERTO"] == "SIM").sum()
-                st.success(f"✅ Base Fixa Processada: Encontrados {aneis_count} Anéis Abertos!")
+                st.success(f"✅ Base Fixa Processada! Cruzamento Duplo identificou: {aneis_count} Anéis Abertos.")
 
                 # 2. BASE B2B
                 if f_b2b:
@@ -486,6 +491,12 @@ elif menu == "📥 Upload & Processamento":
                     df_b2b_proc["TEMPO_DO_CHAMADO"] = df_b2b_proc.apply(calculate_tempo_chamado, axis=1)
                     df_b2b_proc.to_sql('backlog_b2b', engine, if_exists='replace', index=False)
 
+                    df_fmt_atual = load_table('backlog_fixa')
+                    b2b_tokens = set(df_b2b_proc["TSK"].dropna().astype(str).str.strip().str.upper()).union(set(df_b2b_proc["NE_ID"].dropna().astype(str).str.strip().str.upper()))
+                    df_fmt_atual["IS_B2B"] = df_fmt_atual.apply(lambda r: "SIM" if str(r["TSK"]).upper() in b2b_tokens or str(r["NE_ID"]).upper() in b2b_tokens else "NÃO", axis=1)
+                    df_fmt_atual.to_sql('backlog_fixa', engine, if_exists='replace', index=False)
+
+                # 3. BASE MÓVEL BACKLOG
                 if f_movel_backlog:
                     df_movel_raw = load_file(f_movel_backlog, ["MOVEL", "MOBILE", "BACKLOG"])
                     s_tsk_m = get_single_series(df_movel_raw, ["NÚMERO", "NUMERO", "TSK", "CHAMADO", "ORDEM"], "")
