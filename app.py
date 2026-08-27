@@ -347,7 +347,7 @@ if menu == "👤 Gestão de Usuários (Admin)":
 # ==========================================
 elif menu == "📥 Upload & Processamento":
     st.title("📥 Ingestão, Cruzamento e Regras de Negócio")
-    st.caption("Faça o Upload das bases. O cruzamento exigirá Par Exato (NE_ID + EVENTO) para ser Anel.")
+    st.caption("Faça o Upload das bases. O cruzamento usará o Duplo PROCV (Por Equipamento OU Por Evento).")
 
     st.markdown("### 📊 Status Atual das Bases na Nuvem")
     
@@ -407,7 +407,7 @@ elif menu == "📥 Upload & Processamento":
         if not f_fmt:
             st.error("A Base Total Fixa FMT é obrigatória.")
         else:
-            with st.spinner("Lendo planilhas e cruzando PAR EXATO (NEName + Evento)..."):
+            with st.spinner("Lendo planilhas e executando o Duplo PROCV..."):
                 
                 # UPLOADS E SALVAMENTO NA NUVEM
                 df_fmt_raw = load_file(f_fmt, ["BACKLOG", "FMT", "TASK", "EVENTO"])
@@ -468,49 +468,47 @@ elif menu == "📥 Upload & Processamento":
                 df_fmt["TEMPO_DO_CHAMADO"] = df_fmt.apply(calculate_tempo_chamado, axis=1)
 
                 # ==========================================================
-                # O NOVO DUPLO PROCV (PAR PERFEITO: NENAME + EVENTO)
+                # O NOVO DUPLO PROCV (LÓGICA "OU": Bateu Evento OU Bateu Nome)
                 # ==========================================================
-                pares_aneis = set()
+                grafana_ne_set = set()
+                grafana_eve_set = set()
 
-                df_fmmt_cloud = load_table("backlog_fmmt")
-                if not df_fmmt_cloud.empty:
-                    df_fmmt_cloud.columns = [str(c).upper().strip() for c in df_fmmt_cloud.columns]
-                    col_ne = next((c for c in df_fmmt_cloud.columns if any(k in c for k in ["NE ID", "NENAME", "DESCRICAO"])), None)
-                    col_ev = next((c for c in df_fmmt_cloud.columns if any(k in c for k in ["EVENTO", "ICTTTID", "INCIDENTE"])), None)
-                    
-                    if col_ne and col_ev:
-                        for _, r in df_fmmt_cloud.iterrows():
-                            n = str(r[col_ne]).strip().upper()
-                            e = str(r[col_ev]).strip().upper()
-                            if n not in ["NAN", "NONE", "", "-"] and e not in ["NAN", "NONE", "", "-"]:
-                                pares_aneis.add((n, e)) # Cria o par (NEName, ictTTid)
-
+                # Coleta IDs do Grafana na nuvem
                 df_graf_cloud = load_table("backlog_grafana")
                 if not df_graf_cloud.empty:
                     df_graf_cloud.columns = [str(c).upper().strip() for c in df_graf_cloud.columns]
-                    col_ne = next((c for c in df_graf_cloud.columns if any(k in c for k in ["NENAME", "NE ID"])), None)
-                    col_ev = next((c for c in df_graf_cloud.columns if any(k in c for k in ["ICTTTID", "EVENTO"])), None)
+                    col_graf_ne = next((c for c in df_graf_cloud.columns if any(k in c for k in ["NENAME", "NE ID", "ELEMENTO"])), None)
+                    col_graf_eve = next((c for c in df_graf_cloud.columns if any(k in c for k in ["ICTTTID", "EVENTO", "INCIDENTE"])), None)
                     
-                    if col_ne and col_ev:
-                        for _, r in df_graf_cloud.iterrows():
-                            n = str(r[col_ne]).strip().upper()
-                            e = str(r[col_ev]).strip().upper()
-                            if n not in ["NAN", "NONE", "", "-"] and e not in ["NAN", "NONE", "", "-"]:
-                                pares_aneis.add((n, e)) # Cria o par (NEName, ictTTid)
+                    if col_graf_ne:
+                        grafana_ne_set.update(df_graf_cloud[col_graf_ne].dropna().astype(str).str.strip().str.upper())
+                    if col_graf_eve:
+                        grafana_eve_set.update(df_graf_cloud[col_graf_eve].dropna().astype(str).str.strip().str.upper())
 
-                def check_anel_par_perfeito(row):
-                    if not pares_aneis:
+                # Limpeza rigorosa para evitar falsos positivos
+                for s in [grafana_ne_set, grafana_eve_set]:
+                    s.discard(""); s.discard("NAN"); s.discard("NONE"); s.discard("NULL"); s.discard("-")
+
+                def check_anel_duplo_procv(row):
+                    if not grafana_ne_set and not grafana_eve_set:
                         return "NÃO"
                     
                     ne_fmt = str(row.get("NE_ID", "")).strip().upper()
                     ev_fmt = str(row.get("EVENTO", "")).strip().upper()
                     
-                    # Exige que os dois dados (NE_ID E Evento) sejam idênticos ao da base Anel
-                    if (ne_fmt, ev_fmt) in pares_aneis:
-                        return "SIM"
+                    # PROCV 1: Bateu o ID do Evento (ictTTid)?
+                    if ev_fmt and ev_fmt not in ["NAN", "NONE", "NULL", "-", ""]:
+                        if ev_fmt in grafana_eve_set:
+                            return "SIM"
+                            
+                    # PROCV 2: Bateu o Nome do Equipamento (NEName)?
+                    if ne_fmt and ne_fmt not in ["NAN", "NONE", "NULL", "-", ""]:
+                        if ne_fmt in grafana_ne_set:
+                            return "SIM"
+                            
                     return "NÃO"
 
-                df_fmt["ANEL_ABERTO"] = df_fmt.apply(check_anel_par_perfeito, axis=1)
+                df_fmt["ANEL_ABERTO"] = df_fmt.apply(check_anel_duplo_procv, axis=1)
 
                 # Processamento do Histórico CRC
                 df_crc_db = get_crc_data()
@@ -526,7 +524,7 @@ elif menu == "📥 Upload & Processamento":
                 
                 df_fmt.to_sql('backlog_fixa', engine, if_exists='replace', index=False)
                 aneis_count = (df_fmt["ANEL_ABERTO"] == "SIM").sum()
-                st.success(f"✅ Base Fixa Processada: {len(df_fmt)} reg. Cruzamento exato de Anéis (NE+Evento) encontrou: {aneis_count} casos.")
+                st.success(f"✅ Base Fixa Processada: {len(df_fmt)} reg. Duplo PROCV (NE_ID ou Evento) encontrou: {aneis_count} Anéis Abertos.")
 
                 # 2. BASE B2B
                 if f_b2b:
@@ -577,7 +575,7 @@ elif menu == "📥 Upload & Processamento":
                     df_movel["TEMPO_DO_CHAMADO"] = df_movel.apply(calculate_tempo_chamado, axis=1)
                     df_movel.to_sql('backlog_movel', engine, if_exists='replace', index=False)
 
-                st.cache_data.clear()
+                st.cache_data.clear() # Limpa o cache após os uploads para refletir na tela
                 st.success("✅ Todas as bases selecionadas foram processadas com precisão e enviadas para a Nuvem!")
                 st.rerun()
 
@@ -933,7 +931,7 @@ elif menu == "📺 Apresentação Executiva":
 
         # 2. Anéis Abertos
         df_aneis = df_view[df_view["ANEL_ABERTO"] == "SIM"]
-        render_presentation_card("Anéis Abertos (Cruzamento SMART x FMT)", "🔴", df_aneis)
+        render_presentation_card("Anéis Abertos (Grafana x FMT)", "🔴", df_aneis)
         st.divider()
 
         # 3. B2B
