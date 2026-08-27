@@ -239,6 +239,22 @@ def get_single_series(df, col_name_hints, fallback_val=""):
     if not col_found: return pd.Series([fallback_val] * len(df), index=df.index, dtype=str)
     return df[col_found].iloc[:, 0].fillna("").astype(str) if isinstance(df[col_found], pd.DataFrame) else df[col_found].fillna("").astype(str)
 
+def extrair_colunas(df):
+    return {
+        "TSK": get_single_series(df, ["NÚMERO", "NUMERO", "TSK", "CHAMADO", "ORDEM"], ""),
+        "EVENTO": get_single_series(df, ["EVENTO", "ICTTTID", "INCIDENTE"], ""),
+        "END_ID": get_single_series(df, ["END ID", "END_ID", "SITE"], ""),
+        "NE_ID": get_single_series(df, ["NE ID DESCRIÇÃO", "NE ID DO EVENTO", "NENAME", "NE ID"], ""),
+        "TIPO_EQUIPAMENTO": get_single_series(df, ["TIPO DO EQUIPAMENTO", "TIPO NE", "EQUIPAMENTO"], ""),
+        "STATUS": get_single_series(df, ["STATUS"], "Não Acionado"),
+        "FALHA": get_single_series(df, ["ALARME", "FALHA"], ""),
+        "AGING": get_single_series(df, ["AGING"], "-"),
+        "DATA_CRIACAO": get_single_series(df, ["DATA DE CRIAÇÃO", "DATA_CRIACAO", "CRIA"], ""),
+        "TECNICO": get_single_series(df, ["NOME DO TÉCNICO", "NOME TÉCNICO CAMPO", "TÉCNICO", "TECNICO", "RESPONSÁVEL"], ""),
+        "RESUMO": get_single_series(df, ["RESUMO", "OBSERVAÇÕES"], ""),
+        "OBS": get_single_series(df, ["OBS", "NOTAS"], "")
+    }
+
 def categorize_status(st_str):
     s = str(st_str).upper()
     if any(k in s for k in ["ACIONADO", "NOTIFICADO", "ENCAMINHADO"]): return "Acionado"
@@ -321,8 +337,8 @@ if menu == "👤 Gestão de Usuários (Admin)":
 # ABA: UPLOAD & PROCESSAMENTO
 # ==========================================
 elif menu == "📥 Upload & Processamento":
-    st.title("📥 Ingestão, Cruzamento e Regras de Negócio")
-    st.caption("Correção da auto-referência: Fixa agora cruza os Anéis EXCLUSIVAMENTE contra o Grafana.")
+    st.title("📥 Ingestão, Fusão e Cruzamento")
+    st.caption("FUSÃO ATIVA: O sistema puxará automaticamente os chamados faltantes da FMMT para o Backlog da Fixa.")
 
     st.markdown("### 📊 Status Atual das Bases na Nuvem")
     df_fixa_check = load_table("backlog_fixa")
@@ -371,9 +387,10 @@ elif menu == "📥 Upload & Processamento":
         if not f_fmt:
             st.error("A Base Total Fixa FMT é obrigatória.")
         else:
-            with st.spinner("Limpando duplicadas e executando Cruzamento de Anéis contra Grafana..."):
+            with st.spinner("Realizando a Fusão das bases e Cruzamento de Anéis..."):
                 st.cache_data.clear() 
                 
+                # UPLOADS BÁSICOS
                 df_fmt_raw = load_file(f_fmt, ["BACKLOG", "FMT", "TASK", "EVENTO"])
                 
                 df_fmmt_raw = pd.DataFrame()
@@ -394,30 +411,28 @@ elif menu == "📥 Upload & Processamento":
                     df_crc_raw = load_file(f_crc, ["CRC"])
                     if not df_crc_raw.empty: upsert_crc(df_crc_raw)
 
-                # Extrai as colunas da Fixa
-                s_tsk = get_single_series(df_fmt_raw, ["NÚMERO", "NUMERO", "TSK", "CHAMADO", "ORDEM"], "")
-                s_evento = get_single_series(df_fmt_raw, ["EVENTO", "ICTTTID", "INCIDENTE"], "")
-                s_end_id = get_single_series(df_fmt_raw, ["END ID", "END_ID", "SITE"], "")
-                s_ne_id = get_single_series(df_fmt_raw, ["NE ID DESCRIÇÃO", "NE ID DO EVENTO", "NENAME", "NE ID"], "")
-                s_tipo_equip = get_single_series(df_fmt_raw, ["TIPO DO EQUIPAMENTO", "TIPO NE", "EQUIPAMENTO"], "")
-                s_status_raw = get_single_series(df_fmt_raw, ["STATUS"], "Não Acionado")
-                s_falha = get_single_series(df_fmt_raw, ["ALARME", "FALHA"], "")
-                s_aging = get_single_series(df_fmt_raw, ["AGING"], "-")
-                s_data_cria = get_single_series(df_fmt_raw, ["DATA DE CRIAÇÃO", "DATA_CRIACAO", "CRIA"], "")
-                s_tecnico = get_single_series(df_fmt_raw, ["NOME DO TÉCNICO", "NOME TÉCNICO CAMPO", "TÉCNICO", "TECNICO", "RESPONSÁVEL"], "")
-                s_resumo = get_single_series(df_fmt_raw, ["RESUMO", "OBSERVAÇÕES"], "")
-                s_obs = get_single_series(df_fmt_raw, ["OBS", "NOTAS"], "")
+                # ==========================================================
+                # FUSÃO: PUXA OS CHAMADOS FALTANTES DA FMMT PARA A FIXA
+                # ==========================================================
+                dict_fmt = extrair_colunas(df_fmt_raw)
+                
+                df_fmmt_process = df_fmmt_raw if f_fmmt else load_table("backlog_fmmt")
+                if not df_fmmt_process.empty:
+                    dict_fmmt = extrair_colunas(df_fmmt_process)
+                    for key in dict_fmt:
+                        dict_fmt[key] = pd.concat([dict_fmt[key], dict_fmmt[key]], ignore_index=True)
 
-                s_dwdm = s_tipo_equip.apply(lambda val: "SIM" if "DWDM" in str(val).upper().strip() else "NÃO")
+                s_dwdm = dict_fmt["TIPO_EQUIPAMENTO"].apply(lambda val: "SIM" if "DWDM" in str(val).upper().strip() else "NÃO")
 
                 df_fmt = pd.DataFrame({
-                    "TSK": s_tsk, "EVENTO": s_evento, "END_ID": s_end_id, "NE_ID": s_ne_id, "TIPO_EQUIPAMENTO": s_tipo_equip, "DWDM": s_dwdm,
-                    "FALHA": s_falha, "AGING": s_aging, "DATA_CRIACAO": s_data_cria, "STATUS": s_status_raw.apply(categorize_status),
-                    "RESUMO": s_resumo.apply(lambda r: "Em Campo" if "CAMPO" in str(r).upper() else ("Tramitado" if "TRAMITADO" in str(r).upper() else ("Encerrado" if "ENCERRADO" in str(r).upper() else str(r)))),
-                    "TECNICO": s_tecnico, "OBS": s_obs
+                    "TSK": dict_fmt["TSK"], "EVENTO": dict_fmt["EVENTO"], "END_ID": dict_fmt["END_ID"], "NE_ID": dict_fmt["NE_ID"], "TIPO_EQUIPAMENTO": dict_fmt["TIPO_EQUIPAMENTO"], "DWDM": s_dwdm,
+                    "FALHA": dict_fmt["FALHA"], "AGING": dict_fmt["AGING"], "DATA_CRIACAO": dict_fmt["DATA_CRIACAO"], "STATUS": dict_fmt["STATUS"].apply(categorize_status),
+                    "RESUMO": dict_fmt["RESUMO"].apply(lambda r: "Em Campo" if "CAMPO" in str(r).upper() else ("Tramitado" if "TRAMITADO" in str(r).upper() else ("Encerrado" if "ENCERRADO" in str(r).upper() else str(r)))),
+                    "TECNICO": dict_fmt["TECNICO"], "OBS": dict_fmt["OBS"]
                 })
                 
                 # GARANTIA DE BASE LIMPA DE DUPLICADAS
+                df_fmt = df_fmt[df_fmt["TSK"].astype(str).str.strip() != ""]
                 df_fmt = df_fmt.drop_duplicates(subset=["TSK"], keep='first')
 
                 quad_map = get_quadrantes_map()
@@ -433,7 +448,6 @@ elif menu == "📥 Upload & Processamento":
                 global_names = set()
                 global_events = set()
                 
-                # Para evitar "auto-match" entre FMT e FMMT, Anel na Fixa cruza apenas contra Grafana
                 df_graf_process = df_graf_raw if f_grafana else load_table("backlog_grafana")
                 if not df_graf_process.empty:
                     cols = [str(c).upper().strip() for c in df_graf_process.columns]
@@ -492,7 +506,7 @@ elif menu == "📥 Upload & Processamento":
                 df_fmt.to_sql('backlog_fixa', engine, if_exists='replace', index=False)
                 aneis_count = (df_fmt["ANEL_ABERTO"] == "SIM").sum()
                 
-                st.success(f"✅ Processamento Concluído! \nAnéis Abertos identificados na Fixa: {aneis_count} \n\n*(Diagnóstico de Cache - Fixa processada contra: Grafana {len(df_graf_process) if 'df_graf_process' in locals() else 0} registros)*")
+                st.success(f"✅ Fusão Concluída! Chamados faltantes da FMMT foram copiados.\nAnéis Abertos encontrados no total: {aneis_count}")
 
                 # 3. BASE MÓVEL BACKLOG
                 if f_movel_backlog:
