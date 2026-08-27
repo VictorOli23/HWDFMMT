@@ -209,7 +209,7 @@ def get_crc_data():
     return df
 
 # ==========================================
-# 5. FUNÇÕES DE PROCESSAMENTO E LIMPEZA
+# 5. FUNÇÕES DE PROCESSAMENTO AVANÇADO
 # ==========================================
 def load_file(file, target_sheet_hints=None):
     if file is None: return pd.DataFrame()
@@ -218,15 +218,18 @@ def load_file(file, target_sheet_hints=None):
         content = file.getvalue().decode('utf-8', errors='ignore')
         lines = content.splitlines()
         
-        # Ignora a primeira linha se for "sep=," do Grafana
-        skip = 1 if len(lines) > 0 and "sep=" in lines[0].lower() else 0
+        # Remoção do lixo do Grafana (sep=,)
+        if len(lines) > 0 and lines[0].lower().startswith("sep="):
+            lines = lines[1:]
+            
+        clean_content = "\n".join(lines)
         
         try:
-            df = pd.read_csv(io.StringIO(content), skiprows=skip, sep=',')
+            df = pd.read_csv(io.StringIO(clean_content), sep=',')
             if len(df.columns) <= 1:
-                df = pd.read_csv(io.StringIO(content), skiprows=skip, sep=';')
+                df = pd.read_csv(io.StringIO(clean_content), sep=';')
         except:
-            try: df = pd.read_csv(io.StringIO(content), skiprows=skip, sep=';', on_bad_lines='skip')
+            try: df = pd.read_csv(io.StringIO(clean_content), sep=';', on_bad_lines='skip')
             except: df = pd.DataFrame()
         return df
     else:
@@ -239,7 +242,6 @@ def load_file(file, target_sheet_hints=None):
                     break
         df = pd.read_excel(xls, sheet_name=sheet_to_load)
         
-        # Procura por cabeçalhos que começam com Unnamed e corrige
         if len(df) > 0 and any(str(c).startswith("Unnamed") for c in df.columns[:3]):
             for idx in range(min(15, len(df))):
                 row_vals = [str(x).upper() for x in df.iloc[idx].values]
@@ -359,7 +361,7 @@ if menu == "👤 Gestão de Usuários (Admin)":
 # ==========================================
 elif menu == "📥 Upload & Processamento":
     st.title("📥 Ingestão, Cruzamento e Regras de Negócio")
-    st.caption("O sistema agora usa Duplo PROCV (Bateu Nome OU Evento contra Grafana e FMMT).")
+    st.caption("Novo Sistema de Busca Universal (Omni-Search): Imune a trocas de colunas do Grafana e FMMT.")
 
     st.markdown("### 📊 Status Atual das Bases na Nuvem")
     
@@ -419,9 +421,9 @@ elif menu == "📥 Upload & Processamento":
         if not f_fmt:
             st.error("A Base Total Fixa FMT é obrigatória.")
         else:
-            with st.spinner("Lendo planilhas e executando o Duplo PROCV (Nome OU Evento)..."):
+            with st.spinner("Analisando as planilhas e executando a Busca Universal (Omni-Search)..."):
                 
-                # UPLOADS E SALVAMENTO NA NUVEM
+                # UPLOADS
                 df_fmt_raw = load_file(f_fmt, ["BACKLOG", "FMT", "TASK", "EVENTO"])
                 
                 if f_fmmt:
@@ -440,7 +442,7 @@ elif menu == "📥 Upload & Processamento":
                     df_crc_raw = load_file(f_crc, ["CRC"])
                     if not df_crc_raw.empty: upsert_crc(df_crc_raw)
 
-                # Extrai colunas da Fixa, priorizando as corretas
+                # Extrai colunas da Fixa
                 s_tsk = get_single_series(df_fmt_raw, ["NÚMERO", "NUMERO", "TSK", "CHAMADO", "ORDEM"], "")
                 s_evento = get_single_series(df_fmt_raw, ["EVENTO", "ICTTTID", "INCIDENTE"], "")
                 s_end_id = get_single_series(df_fmt_raw, ["END ID", "END_ID", "SITE"], "")
@@ -471,47 +473,45 @@ elif menu == "📥 Upload & Processamento":
                 df_fmt["TEMPO_DO_CHAMADO"] = df_fmt.apply(calculate_tempo_chamado, axis=1)
 
                 # ==========================================================
-                # O DUPLO PROCV (LÓGICA "OU" COM GRAFANA E FMMT)
+                # OMNI-SEARCH (BUSCA UNIVERSAL CONTRA TROCA DE COLUNAS)
                 # ==========================================================
-                valid_ne_set = set()
-                valid_eve_set = set()
-
+                global_pool = set()
+                
                 df_graf_cloud = load_table("backlog_grafana")
                 if not df_graf_cloud.empty:
-                    df_graf_cloud.columns = [str(c).upper().strip() for c in df_graf_cloud.columns]
-                    col_graf_ne = next((c for c in df_graf_cloud.columns if any(k in c for k in ["NENAME", "NE ID", "ELEMENTO"])), None)
-                    col_graf_eve = next((c for c in df_graf_cloud.columns if any(k in c for k in ["ICTTTID", "EVENTO", "INCIDENTE"])), None)
-                    if col_graf_ne: valid_ne_set.update(df_graf_cloud[col_graf_ne].dropna().astype(str).str.strip().str.upper())
-                    if col_graf_eve: valid_eve_set.update(df_graf_cloud[col_graf_eve].dropna().astype(str).str.strip().str.upper())
+                    # Amassa todo o arquivo do Grafana em um grande conjunto de textos (independente de coluna)
+                    for col in df_graf_cloud.columns:
+                        global_pool.update(df_graf_cloud[col].dropna().astype(str).str.strip().str.upper())
 
                 df_fmmt_cloud = load_table("backlog_fmmt")
                 if not df_fmmt_cloud.empty:
-                    df_fmmt_cloud.columns = [str(c).upper().strip() for c in df_fmmt_cloud.columns]
-                    col_fmmt_ne = next((c for c in df_fmmt_cloud.columns if any(k in c for k in ["NE ID", "NENAME", "DESCRICAO"])), None)
-                    col_fmmt_eve = next((c for c in df_fmmt_cloud.columns if any(k in c for k in ["EVENTO", "ICTTTID", "INCIDENTE"])), None)
-                    if col_fmmt_ne: valid_ne_set.update(df_fmmt_cloud[col_fmmt_ne].dropna().astype(str).str.strip().str.upper())
-                    if col_fmmt_eve: valid_eve_set.update(df_fmmt_cloud[col_fmmt_eve].dropna().astype(str).str.strip().str.upper())
+                    # Amassa todo o arquivo FMMT/Smart no mesmo conjunto
+                    for col in df_fmmt_cloud.columns:
+                        global_pool.update(df_fmmt_cloud[col].dropna().astype(str).str.strip().str.upper())
 
-                for s in [valid_ne_set, valid_eve_set]:
-                    s.discard(""); s.discard("NAN"); s.discard("NONE"); s.discard("NULL"); s.discard("-")
+                # Limpeza de lixos e termos muito comuns
+                lixos_comuns = ["", "NAN", "NONE", "NULL", "-", "ROUTER", "SWITCH", "HUB", "SIM", "NÃO"]
+                for lixo in lixos_comuns:
+                    global_pool.discard(lixo)
 
-                def check_anel_duplo(row):
-                    if not valid_ne_set and not valid_eve_set: return "NÃO"
+                def check_anel_omni_search(row):
+                    if not global_pool:
+                        return "NÃO"
                     
                     ne_fmt = str(row.get("NE_ID", "")).strip().upper()
                     ev_fmt = str(row.get("EVENTO", "")).strip().upper()
                     
-                    # 1. Bateu Evento?
-                    if ev_fmt and ev_fmt not in ["NAN", "NONE", "NULL", "-", ""]:
-                        if ev_fmt in valid_eve_set: return "SIM"
-                            
-                    # 2. Bateu Nome?
-                    if ne_fmt and ne_fmt not in ["NAN", "NONE", "NULL", "-", ""]:
-                        if ne_fmt in valid_ne_set: return "SIM"
-                            
+                    # 1. O ticket (Evento) existe em QUALQUER lugar do Grafana ou FMMT?
+                    if len(ev_fmt) >= 5 and ev_fmt in global_pool:
+                        return "SIM"
+                        
+                    # 2. O Nome do Equipamento (NE_ID) existe em QUALQUER lugar do Grafana ou FMMT?
+                    if len(ne_fmt) >= 5 and ne_fmt in global_pool:
+                        return "SIM"
+                        
                     return "NÃO"
 
-                df_fmt["ANEL_ABERTO"] = df_fmt.apply(check_anel_duplo, axis=1)
+                df_fmt["ANEL_ABERTO"] = df_fmt.apply(check_anel_omni_search, axis=1)
 
                 df_crc_db = get_crc_data()
                 crc_tsks = set(df_crc_db["tsk"].dropna().astype(str).str.strip().str.upper()) if not df_crc_db.empty else set()
@@ -526,7 +526,7 @@ elif menu == "📥 Upload & Processamento":
                 
                 df_fmt.to_sql('backlog_fixa', engine, if_exists='replace', index=False)
                 aneis_count = (df_fmt["ANEL_ABERTO"] == "SIM").sum()
-                st.success(f"✅ Base Fixa Processada: {len(df_fmt)} reg. Cruzamento (Eventos e Nomes) identificou: {aneis_count} Anéis.")
+                st.success(f"✅ Base Fixa Processada: {len(df_fmt)} reg. A Busca Universal carregou {len(global_pool)} chaves únicas de busca e encontrou {aneis_count} Anéis.")
 
                 # 2. BASE B2B
                 if f_b2b:
@@ -577,8 +577,7 @@ elif menu == "📥 Upload & Processamento":
                     df_movel["TEMPO_DO_CHAMADO"] = df_movel.apply(calculate_tempo_chamado, axis=1)
                     df_movel.to_sql('backlog_movel', engine, if_exists='replace', index=False)
 
-                st.cache_data.clear()
-                st.success("✅ Processamento concluído com sucesso!")
+                st.cache_data.clear() 
                 st.rerun()
 
 # ==========================================
