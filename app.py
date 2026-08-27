@@ -347,7 +347,7 @@ if menu == "👤 Gestão de Usuários (Admin)":
 # ==========================================
 elif menu == "📥 Upload & Processamento":
     st.title("📥 Ingestão, Cruzamento e Regras de Negócio")
-    st.caption("O cruzamento de Anéis agora exige 100% de precisão (Nome do Equipamento + Evento/ictTTid).")
+    st.caption("Faça o Upload das bases. O cruzamento exigirá Par Exato (NE_ID + EVENTO) para ser Anel.")
 
     st.markdown("### 📊 Status Atual das Bases na Nuvem")
     
@@ -356,8 +356,6 @@ elif menu == "📥 Upload & Processamento":
     df_movel_check = load_table("backlog_movel")
     df_b2b_check = load_table("backlog_b2b")
     df_grafana_check = load_table("backlog_grafana")
-    df_quad_check = load_table("quadrantes")
-    df_crc_check = load_table("crc_historico")
 
     c1, c2, c3, c4 = st.columns(4)
     
@@ -389,17 +387,6 @@ elif menu == "📥 Upload & Processamento":
             if st.button("🗑️ Limpar Grafana"): drop_table("backlog_grafana"); st.rerun()
         else: st.info("⚪ **Grafana:** Vazio")
 
-        if not df_quad_check.empty:
-            st.success(f"🟢 **Quadrantes**\n\nTotal: {len(df_quad_check)} reg.")
-            if st.button("🗑️ Limpar Quadrantes"): drop_table("quadrantes"); st.rerun()
-        else: st.info("⚪ **Quadrantes:** Vazio")
-
-    with c4:
-        if not df_crc_check.empty:
-            st.success(f"🟢 **Histórico CRC**\n\nTotal: {len(df_crc_check)} reg.")
-            if st.button("🗑️ Limpar CRC"): drop_table("crc_historico"); st.rerun()
-        else: st.info("⚪ **CRC:** Vazio")
-
     st.markdown("---")
 
     col1, col2 = st.columns(2)
@@ -420,9 +407,9 @@ elif menu == "📥 Upload & Processamento":
         if not f_fmt:
             st.error("A Base Total Fixa FMT é obrigatória.")
         else:
-            with st.spinner("Lendo planilhas e processando cruzamento duplo (NEName + ictTTid)..."):
+            with st.spinner("Lendo planilhas e cruzando PAR EXATO (NEName + Evento)..."):
                 
-                # 1. PROCESSAMENTO DAS BASES E UPLOADS
+                # UPLOADS E SALVAMENTO NA NUVEM
                 df_fmt_raw = load_file(f_fmt, ["BACKLOG", "FMT", "TASK", "EVENTO"])
                 
                 if f_fmmt:
@@ -481,48 +468,49 @@ elif menu == "📥 Upload & Processamento":
                 df_fmt["TEMPO_DO_CHAMADO"] = df_fmt.apply(calculate_tempo_chamado, axis=1)
 
                 # ==========================================================
-                # DUPLO PROCV EXATO: NENAME + EVENTO (ictTTid)
+                # O NOVO DUPLO PROCV (PAR PERFEITO: NENAME + EVENTO)
                 # ==========================================================
-                grafana_pairs = set()
+                pares_aneis = set()
+
+                df_fmmt_cloud = load_table("backlog_fmmt")
+                if not df_fmmt_cloud.empty:
+                    df_fmmt_cloud.columns = [str(c).upper().strip() for c in df_fmmt_cloud.columns]
+                    col_ne = next((c for c in df_fmmt_cloud.columns if any(k in c for k in ["NE ID", "NENAME", "DESCRICAO"])), None)
+                    col_ev = next((c for c in df_fmmt_cloud.columns if any(k in c for k in ["EVENTO", "ICTTTID", "INCIDENTE"])), None)
+                    
+                    if col_ne and col_ev:
+                        for _, r in df_fmmt_cloud.iterrows():
+                            n = str(r[col_ne]).strip().upper()
+                            e = str(r[col_ev]).strip().upper()
+                            if n not in ["NAN", "NONE", "", "-"] and e not in ["NAN", "NONE", "", "-"]:
+                                pares_aneis.add((n, e)) # Cria o par (NEName, ictTTid)
 
                 df_graf_cloud = load_table("backlog_grafana")
                 if not df_graf_cloud.empty:
                     df_graf_cloud.columns = [str(c).upper().strip() for c in df_graf_cloud.columns]
-                    col_graf_ne = next((c for c in df_graf_cloud.columns if any(k in c for k in ["NENAME", "NE ID", "ELEMENTO"])), None)
-                    col_graf_eve = next((c for c in df_graf_cloud.columns if any(k in c for k in ["ICTTTID", "EVENTO"])), None)
+                    col_ne = next((c for c in df_graf_cloud.columns if any(k in c for k in ["NENAME", "NE ID"])), None)
+                    col_ev = next((c for c in df_graf_cloud.columns if any(k in c for k in ["ICTTTID", "EVENTO"])), None)
                     
-                    if col_graf_ne and col_graf_eve:
+                    if col_ne and col_ev:
                         for _, r in df_graf_cloud.iterrows():
-                            ne = str(r[col_graf_ne]).strip().upper()
-                            eve = str(r[col_graf_eve]).strip().upper()
-                            if ne not in ["NAN", "NONE", "NULL", "", "-"] and eve not in ["NAN", "NONE", "NULL", "", "-"]:
-                                grafana_pairs.add((ne, eve))
-                                
-                df_fmmt_cloud = load_table("backlog_fmmt")
-                if not df_fmmt_cloud.empty:
-                    df_fmmt_cloud.columns = [str(c).upper().strip() for c in df_fmmt_cloud.columns]
-                    col_smart_ne = next((c for c in df_fmmt_cloud.columns if any(k in c for k in ["NE ID", "NENAME", "DESCRICAO"])), None)
-                    col_smart_eve = next((c for c in df_fmmt_cloud.columns if any(k in c for k in ["EVENTO", "ICTTTID", "INCIDENTE"])), None)
-                    
-                    if col_smart_ne and col_smart_eve:
-                        for _, r in df_fmmt_cloud.iterrows():
-                            ne = str(r[col_smart_ne]).strip().upper()
-                            eve = str(r[col_smart_eve]).strip().upper()
-                            if ne not in ["NAN", "NONE", "NULL", "", "-"] and eve not in ["NAN", "NONE", "NULL", "", "-"]:
-                                grafana_pairs.add((ne, eve))
+                            n = str(r[col_ne]).strip().upper()
+                            e = str(r[col_ev]).strip().upper()
+                            if n not in ["NAN", "NONE", "", "-"] and e not in ["NAN", "NONE", "", "-"]:
+                                pares_aneis.add((n, e)) # Cria o par (NEName, ictTTid)
 
-                def check_anel_preciso(row):
-                    if not grafana_pairs:
+                def check_anel_par_perfeito(row):
+                    if not pares_aneis:
                         return "NÃO"
                     
-                    ne = str(row.get("NE_ID", "")).strip().upper()
-                    eve = str(row.get("EVENTO", "")).strip().upper()
+                    ne_fmt = str(row.get("NE_ID", "")).strip().upper()
+                    ev_fmt = str(row.get("EVENTO", "")).strip().upper()
                     
-                    if (ne, eve) in grafana_pairs:
+                    # Exige que os dois dados (NE_ID E Evento) sejam idênticos ao da base Anel
+                    if (ne_fmt, ev_fmt) in pares_aneis:
                         return "SIM"
                     return "NÃO"
 
-                df_fmt["ANEL_ABERTO"] = df_fmt.apply(check_anel_preciso, axis=1)
+                df_fmt["ANEL_ABERTO"] = df_fmt.apply(check_anel_par_perfeito, axis=1)
 
                 # Processamento do Histórico CRC
                 df_crc_db = get_crc_data()
@@ -538,7 +526,7 @@ elif menu == "📥 Upload & Processamento":
                 
                 df_fmt.to_sql('backlog_fixa', engine, if_exists='replace', index=False)
                 aneis_count = (df_fmt["ANEL_ABERTO"] == "SIM").sum()
-                st.success(f"✅ Base Fixa Enviada para a Nuvem: {len(df_fmt)} registros. Cruzamento exato (NE+EVENTO) identificou: {aneis_count} anéis.")
+                st.success(f"✅ Base Fixa Processada: {len(df_fmt)} reg. Cruzamento exato de Anéis (NE+Evento) encontrou: {aneis_count} casos.")
 
                 # 2. BASE B2B
                 if f_b2b:
@@ -589,7 +577,7 @@ elif menu == "📥 Upload & Processamento":
                     df_movel["TEMPO_DO_CHAMADO"] = df_movel.apply(calculate_tempo_chamado, axis=1)
                     df_movel.to_sql('backlog_movel', engine, if_exists='replace', index=False)
 
-                st.cache_data.clear() # Limpa o cache após os uploads para refletir na tela
+                st.cache_data.clear()
                 st.success("✅ Todas as bases selecionadas foram processadas com precisão e enviadas para a Nuvem!")
                 st.rerun()
 
