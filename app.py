@@ -25,7 +25,7 @@ if 'is_admin' not in st.session_state:
     st.session_state['is_admin'] = False
 
 # ==========================================
-# 2. CONEXÃO COM O BANCO EM NUVEM OU LOCAL
+# 2. CONEXÃO COM O BANCO EM NUVEM OU LOCAL E ROTINAS
 # ==========================================
 DB_URL = os.environ.get("DB_URL")
 
@@ -64,9 +64,51 @@ def init_cloud_db():
                 data_atualizacao VARCHAR(50)
             )
         """))
+        conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS system_config (
+                key VARCHAR(50) PRIMARY KEY,
+                value VARCHAR(50)
+            )
+        """))
         conn.commit()
 
 init_cloud_db()
+
+# ROTINA AUTOMÁTICA DE MEIA-NOITE (SNAPSHOP DIÁRIO E ZERAR BASES)
+def run_daily_snapshot():
+    today_str = datetime.now().strftime("%Y-%m-%d")
+    with engine.connect() as conn:
+        try:
+            res = conn.execute(text("SELECT value FROM system_config WHERE key='last_date'")).fetchone()
+            last_date = res[0] if res else None
+        except:
+            last_date = None
+            
+        if not last_date:
+            conn.execute(text("INSERT INTO system_config (key, value) VALUES ('last_date', :d)"), {"d": today_str})
+            conn.commit()
+            return
+        
+        if last_date != today_str:
+            # Virou o dia! Salva a foto do dia anterior no Histórico de Dias
+            try:
+                df_fixa = pd.read_sql_table('backlog_fixa', conn)
+                if not df_fixa.empty:
+                    df_fixa['data_snapshot'] = last_date
+                    df_fixa.to_sql('historico_diario', engine, if_exists='append', index=False)
+            except:
+                pass
+            
+            # Zera as tabelas operacionais do dia
+            tables_to_clear = ['backlog_fixa', 'backlog_fmmt', 'backlog_movel', 'backlog_b2b', 'backlog_grafana', 'backlog_fixa_previous']
+            for t in tables_to_clear:
+                conn.execute(text(f"DROP TABLE IF EXISTS {t}"))
+            
+            conn.execute(text("UPDATE system_config SET value=:d WHERE key='last_date'"), {"d": today_str})
+            conn.commit()
+            st.cache_data.clear()
+
+run_daily_snapshot()
 
 @st.cache_data(ttl=900, show_spinner=False)
 def load_table(table_name):
@@ -306,7 +348,8 @@ abas_disponiveis = [
     "💼 Gestão B2B",
     "📺 Apresentação Executiva",
     "📋 Base Geral FMT",
-    "🗄️ Histórico CRC"
+    "🗄️ Histórico CRC",
+    "📅 Histórico Diário (Dias)"
 ]
 
 if st.session_state['is_admin']: abas_disponiveis.insert(0, "👤 Gestão de Usuários (Admin)")
@@ -413,6 +456,8 @@ elif menu == "📥 Upload & Processamento":
                 # ==========================================================
                 # FUSÃO: PUXA OS CHAMADOS FALTANTES DA FMMT PARA A FIXA
                 # ==========================================================
+                quad_map = get_quadrantes_map() # Mapa central de quadrantes
+                
                 df_fmt_base = pd.DataFrame(extrair_colunas(df_fmt_raw))
                 df_fmt_base["ORIGEM"] = "FMT"
                 
@@ -433,7 +478,6 @@ elif menu == "📥 Upload & Processamento":
                 df_fmt = df_fmt[df_fmt["TSK"].astype(str).str.strip() != ""]
                 df_fmt = df_fmt.drop_duplicates(subset=["TSK"], keep='first')
 
-                quad_map = get_quadrantes_map()
                 df_fmt["QUADRANTE"] = df_fmt["END_ID"].astype(str).str.strip().str.upper().map(quad_map)
                 df_fmt["QUADRANTE"] = df_fmt["QUADRANTE"].fillna(
                     df_fmt["END_ID"].astype(str).apply(lambda x: re.search(r'(QD\s*\d+|ANF\s*\d+)', str(x), re.IGNORECASE).group(0).upper() if re.search(r'(QD\s*\d+|ANF\s*\d+)', str(x), re.IGNORECASE) else "NÃO INFORMADO")
@@ -480,10 +524,25 @@ elif menu == "📥 Upload & Processamento":
                 if f_b2b:
                     df_b2b_raw = load_file(f_b2b, ["B2B", "CORPORATIVO"])
                     s_b2b_tsk = get_single_series(df_b2b_raw, ["NÚMERO", "NUMERO", "TSK", "CHAMADO", "ORDEM"], "")
+                    s_b2b_end = get_single_series(df_b2b_raw, ["END ID", "END_ID", "SITE"], "")
                     s_b2b_ne = get_single_series(df_b2b_raw, ["NE ID DO EVENTO", "NE ID", "NENAME"], "")
+                    s_b2b_status = get_single_series(df_b2b_raw, ["STATUS"], "Não Acionado")
+                    s_b2b_falha = get_single_series(df_b2b_raw, ["ALARME", "FALHA"], "")
+                    s_b2b_aging = get_single_series(df_b2b_raw, ["AGING"], "-")
+                    s_b2b_cria = get_single_series(df_b2b_raw, ["DATA DE CRIAÇÃO", "DATA_CRIACAO", "CRIA"], "")
+                    s_b2b_tec = get_single_series(df_b2b_raw, ["NOME DO TÉCNICO", "NOME TÉCNICO CAMPO", "TÉCNICO", "TECNICO"], "")
+                    s_b2b_res = get_single_series(df_b2b_raw, ["RESUMO", "OBSERVAÇÕES"], "")
+                    s_b2b_obs = get_single_series(df_b2b_raw, ["OBS", "NOTAS"], "")
                     
-                    df_b2b_proc = pd.DataFrame({"TSK": s_b2b_tsk, "NE_ID": s_b2b_ne})
+                    df_b2b_proc = pd.DataFrame({
+                        "TSK": s_b2b_tsk, "END_ID": s_b2b_end, "NE_ID": s_b2b_ne, "FALHA": s_b2b_falha, "AGING": s_b2b_aging, "DATA_CRIACAO": s_b2b_cria,
+                        "STATUS": s_b2b_status.apply(categorize_status), "RESUMO": s_b2b_res.apply(lambda r: "Em Campo" if "CAMPO" in str(r).upper() else ("Tramitado" if "TRAMITADO" in str(r).upper() else ("Encerrado" if "ENCERRADO" in str(r).upper() else str(r)))),
+                        "TECNICO": s_b2b_tec, "OBS": s_b2b_obs
+                    })
                     df_b2b_proc = df_b2b_proc.drop_duplicates(subset=["TSK"], keep='first')
+                    df_b2b_proc["QUADRANTE"] = df_b2b_proc["END_ID"].astype(str).str.strip().str.upper().map(quad_map)
+                    df_b2b_proc["QUADRANTE"] = df_b2b_proc["QUADRANTE"].fillna(df_b2b_proc["END_ID"].astype(str).apply(lambda x: re.search(r'(QD\s*\d+|ANF\s*\d+)', str(x), re.IGNORECASE).group(0).upper() if re.search(r'(QD\s*\d+|ANF\s*\d+)', str(x), re.IGNORECASE) else "NÃO INFORMADO"))
+                    df_b2b_proc["TEMPO_DO_CHAMADO"] = df_b2b_proc.apply(calculate_tempo_chamado, axis=1)
                     df_b2b_proc.to_sql('backlog_b2b', engine, if_exists='replace', index=False)
 
                     b2b_tokens = set(df_b2b_proc["TSK"].dropna().astype(str).str.strip().str.upper()).union(set(df_b2b_proc["NE_ID"].dropna().astype(str).str.strip().str.upper()))
@@ -526,6 +585,8 @@ elif menu == "📥 Upload & Processamento":
                         "TECNICO": s_tec_m, "OBS": s_obs_m
                     })
                     df_movel = df_movel.drop_duplicates(subset=["TSK"], keep='first')
+                    df_movel["QUADRANTE"] = df_movel["END_ID"].astype(str).str.strip().str.upper().map(quad_map)
+                    df_movel["QUADRANTE"] = df_movel["QUADRANTE"].fillna(df_movel["END_ID"].astype(str).apply(lambda x: re.search(r'(QD\s*\d+|ANF\s*\d+)', str(x), re.IGNORECASE).group(0).upper() if re.search(r'(QD\s*\d+|ANF\s*\d+)', str(x), re.IGNORECASE) else "NÃO INFORMADO"))
                     df_movel["TEMPO_DO_CHAMADO"] = df_movel.apply(calculate_tempo_chamado, axis=1)
                     df_movel.to_sql('backlog_movel', engine, if_exists='replace', index=False)
 
@@ -558,7 +619,7 @@ elif menu == "📂 Backlog Operacional (Fixa)":
 
         df_bk_view = df.loc[:, ~df.columns.duplicated()].copy()
 
-        c_f1, c_f2, c_f3, c_f4, c_f5 = st.columns([1.2, 1.2, 1, 1, 1.5])
+        c_f1, c_f2, c_f3, c_f4, c_f5, c_f6 = st.columns([1.2, 1.2, 1, 1, 1.2, 1.5])
         with c_f1:
             st_opts = ["Todos"] + sorted(list(df_bk_view["STATUS"].dropna().unique()))
             sel_st = st.selectbox("Status:", options=st_opts, key="bk_status")
@@ -570,12 +631,16 @@ elif menu == "📂 Backlog Operacional (Fixa)":
         with c_f4:
             sel_dwdm = st.selectbox("DWDM:", options=["Todos", "SIM", "NÃO"], key="bk_dwdm")
         with c_f5:
+            quad_opts = ["Todos"] + sorted([str(x) for x in df_bk_view["QUADRANTE"].dropna().unique()])
+            sel_quad = st.selectbox("Quadrante:", options=quad_opts, key="bk_quad")
+        with c_f6:
             busca_bk = st.text_input("🔍 Busca rápida:", key="bk_busca")
 
         if sel_st != "Todos": df_bk_view = df_bk_view[df_bk_view["STATUS"] == sel_st]
         if sel_origem != "Todas": df_bk_view = df_bk_view[df_bk_view["ORIGEM"] == sel_origem]
         if sel_anel != "Todos": df_bk_view = df_bk_view[df_bk_view["ANEL_ABERTO"] == sel_anel]
         if sel_dwdm != "Todos": df_bk_view = df_bk_view[df_bk_view["DWDM"] == sel_dwdm]
+        if sel_quad != "Todos": df_bk_view = df_bk_view[df_bk_view["QUADRANTE"] == sel_quad]
         if busca_bk: df_bk_view = df_bk_view[df_bk_view.astype(str).apply(lambda row: row.str.contains(busca_bk, case=False).any(), axis=1)]
 
         column_config = {
@@ -642,6 +707,8 @@ elif menu == "📱 Backlog Móvel":
     if df_movel.empty:
         st.warning("Nenhuma base Móvel encontrada na Nuvem. Faça o upload na primeira aba (Opção 3).")
     else:
+        if "QUADRANTE" not in df_movel.columns: df_movel["QUADRANTE"] = "NÃO INFORMADO"
+        
         stats_movel = get_status_counts(df_movel, status_col="STATUS")
         m1, m2, m3, m4, m5 = st.columns(5)
         m1.metric("Total Móvel", stats_movel["Total"])
@@ -652,25 +719,30 @@ elif menu == "📱 Backlog Móvel":
 
         st.divider()
 
-        cols_movel = ["TSK", "END_ID", "NE_ID", "TEMPO_DO_CHAMADO", "AGING", "FALHA", "STATUS", "OBS", "RESUMO", "TECNICO"]
+        cols_movel = ["TSK", "END_ID", "QUADRANTE", "NE_ID", "TEMPO_DO_CHAMADO", "AGING", "FALHA", "STATUS", "OBS", "RESUMO", "TECNICO"]
         for c in cols_movel:
             if c not in df_movel.columns: df_movel[c] = ""
 
         df_movel_view = df_movel.loc[:, ~df_movel.columns.duplicated()].copy()
 
-        c_m1, c_m2 = st.columns([1, 3])
+        c_m1, c_m2, c_m3 = st.columns([1, 1, 2])
         with c_m1:
             st_movel_opts = ["Todos"] + sorted(list(df_movel_view["STATUS"].dropna().unique()))
-            sel_movel_st = st.selectbox("Filtrar por Status Móvel:", options=st_movel_opts)
+            sel_movel_st = st.selectbox("Filtrar Status:", options=st_movel_opts, key="mv_st")
         with c_m2:
-            busca_movel = st.text_input("🔍 Busca Móvel (Número / TSK, NE ID, Falha, Técnico):")
+            quad_opts_m = ["Todos"] + sorted([str(x) for x in df_movel_view["QUADRANTE"].dropna().unique()])
+            sel_movel_quad = st.selectbox("Filtrar Quadrante:", options=quad_opts_m, key="mv_quad")
+        with c_m3:
+            busca_movel = st.text_input("🔍 Busca Móvel (Número / TSK, NE ID, Falha, Técnico):", key="mv_busca")
 
         if sel_movel_st != "Todos": df_movel_view = df_movel_view[df_movel_view["STATUS"] == sel_movel_st]
+        if sel_movel_quad != "Todos": df_movel_view = df_movel_view[df_movel_view["QUADRANTE"] == sel_movel_quad]
         if busca_movel: df_movel_view = df_movel_view[df_movel_view.astype(str).apply(lambda row: row.str.contains(busca_movel, case=False).any(), axis=1)]
 
         column_config_movel = {
             "TSK": st.column_config.TextColumn("TSK / Número", disabled=True),
             "END_ID": st.column_config.TextColumn("END ID", disabled=True),
+            "QUADRANTE": st.column_config.TextColumn("QDRs", disabled=True),
             "NE_ID": st.column_config.TextColumn("NE ID", disabled=True),
             "TEMPO_DO_CHAMADO": st.column_config.TextColumn("Tempo Chamado", disabled=True),
             "AGING": st.column_config.TextColumn("Aging", disabled=True),
@@ -800,6 +872,8 @@ elif menu == "💼 Gestão B2B":
     if df_b2b.empty:
         st.warning("Nenhuma base B2B carregada na nuvem. Envie o arquivo B2B na primeira aba.")
     else:
+        if "QUADRANTE" not in df_b2b.columns: df_b2b["QUADRANTE"] = "NÃO INFORMADO"
+
         stats_b2b = get_status_counts(df_b2b, status_col="STATUS")
         m1, m2, m3, m4, m5 = st.columns(5)
         m1.metric("Total B2B", stats_b2b["Total"])
@@ -810,25 +884,30 @@ elif menu == "💼 Gestão B2B":
 
         st.divider()
 
-        cols_b2b = ["TSK", "TEMPO_DO_CHAMADO", "NE_ID", "END_ID", "FALHA", "STATUS", "RESUMO", "TECNICO", "OBS"]
+        cols_b2b = ["TSK", "TEMPO_DO_CHAMADO", "QUADRANTE", "NE_ID", "END_ID", "FALHA", "STATUS", "RESUMO", "TECNICO", "OBS"]
         for c in cols_b2b:
             if c not in df_b2b.columns: df_b2b[c] = ""
 
         df_b2b_view = df_b2b.loc[:, ~df_b2b.columns.duplicated()].copy()
 
-        c_b1, c_b2 = st.columns([1, 2])
+        c_b1, c_b2, c_b3 = st.columns([1, 1, 2])
         with c_b1:
             st_b2b_opts = ["Todos"] + sorted(list(df_b2b_view["STATUS"].dropna().unique()))
-            sel_b2b_st = st.selectbox("Filtrar por Status B2B:", options=st_b2b_opts)
+            sel_b2b_st = st.selectbox("Filtrar Status:", options=st_b2b_opts, key="b2b_st")
         with c_b2:
-            busca_b2b = st.text_input("🔍 Busca B2B (Número / TSK, NE ID, Falha, Técnico):")
+            quad_opts_b = ["Todos"] + sorted([str(x) for x in df_b2b_view["QUADRANTE"].dropna().unique()])
+            sel_b2b_quad = st.selectbox("Filtrar Quadrante:", options=quad_opts_b, key="b2b_quad")
+        with c_b3:
+            busca_b2b = st.text_input("🔍 Busca B2B (Número / TSK, NE ID, Falha, Técnico):", key="b2b_busca")
 
         if sel_b2b_st != "Todos": df_b2b_view = df_b2b_view[df_b2b_view["STATUS"] == sel_b2b_st]
+        if sel_b2b_quad != "Todos": df_b2b_view = df_b2b_view[df_b2b_view["QUADRANTE"] == sel_b2b_quad]
         if busca_b2b: df_b2b_view = df_b2b_view[df_b2b_view.astype(str).apply(lambda row: row.str.contains(busca_b2b, case=False).any(), axis=1)]
 
         column_config_b2b = {
             "TSK": st.column_config.TextColumn("Número / TSK", disabled=True),
             "TEMPO_DO_CHAMADO": st.column_config.TextColumn("Tempo Chamado", disabled=True),
+            "QUADRANTE": st.column_config.TextColumn("QDRs", disabled=True),
             "NE_ID": st.column_config.TextColumn("NE ID", disabled=True),
             "END_ID": st.column_config.TextColumn("END ID", disabled=True),
             "FALHA": st.column_config.TextColumn("Falha", disabled=True),
@@ -1036,3 +1115,26 @@ elif menu == "🗄️ Histórico CRC":
         df_crc_view = df_crc_view[df_crc_view["tsk"].str.contains(busca_crc, case=False, na=False)]
 
     st.dataframe(df_crc_view, use_container_width=True)
+
+# ==========================================
+# ABA 12: HISTÓRICO DIÁRIO (EOD)
+# ==========================================
+elif menu == "📅 Histórico Diário (Dias)":
+    st.title("📅 Histórico Diário (Snapshots)")
+    st.caption("Arquivos de fechamento salvos automaticamente na virada do dia (00:00).")
+    
+    df_hist = load_table("historico_diario")
+    if df_hist.empty:
+        st.info("Nenhum histórico diário gerado ainda. O sistema salvará o primeiro hoje à meia-noite.")
+    else:
+        dias_disponiveis = sorted(df_hist["data_snapshot"].unique(), reverse=True)
+        selected_dia = st.selectbox("Selecione o Dia para visualizar e baixar:", options=dias_disponiveis)
+        
+        df_view = df_hist[df_hist["data_snapshot"] == selected_dia]
+        st.metric(f"Total de Registros do Plantão ({selected_dia})", len(df_view))
+        st.dataframe(df_view, use_container_width=True)
+        
+        output = io.BytesIO()
+        with pd.ExcelWriter(output, engine="openpyxl") as writer:
+            df_view.to_excel(writer, index=False, sheet_name=f"Fixa_{selected_dia}")
+        st.download_button("📥 Baixar Relatório do Dia em Excel", data=output.getvalue(), file_name=f"Backlog_Fixa_Historico_{selected_dia}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
