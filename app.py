@@ -305,7 +305,6 @@ abas_disponiveis = [
     "🔄 Handover (Entrantes/Saintes)",
     "💼 Gestão B2B",
     "📺 Apresentação Executiva",
-    "📊 Métricas & Trâmites",
     "📋 Base Geral FMT",
     "🗄️ Histórico CRC"
 ]
@@ -390,7 +389,6 @@ elif menu == "📥 Upload & Processamento":
             with st.spinner("Realizando a Fusão das bases e Cruzamento de Anéis..."):
                 st.cache_data.clear() 
                 
-                # UPLOADS BÁSICOS
                 df_fmt_raw = load_file(f_fmt, ["BACKLOG", "FMT", "TASK", "EVENTO"])
                 
                 df_fmmt_raw = pd.DataFrame()
@@ -844,6 +842,8 @@ elif menu == "💼 Gestão B2B":
 # ==========================================
 elif menu == "📺 Apresentação Executiva":
     st.title("📺 Apresentação Executiva - Painel NOC FMT")
+    st.markdown("Visão consolidada do Backbone para report gerencial e tomada de decisão rápida.")
+    
     df = load_table("backlog_fixa")
 
     if df.empty:
@@ -852,82 +852,69 @@ elif menu == "📺 Apresentação Executiva":
         for c in ["DWDM", "ANEL_ABERTO", "IS_B2B", "IS_CRC"]:
             if c not in df.columns: df[c] = "NÃO"
 
-        st.subheader("⏳ Filtro por Tempo de Vida (Aging)")
+        st.markdown("### 🌐 Resumo Global da Operação")
+        cg1, cg2, cg3, cg4 = st.columns(4)
+        cg1.metric("Total de Eventos Ativos", len(df))
+        cg2.metric("Anéis Abertos (Crítico)", (df["ANEL_ABERTO"] == "SIM").sum())
+        cg3.metric("Equipamentos DWDM", (df["DWDM"] == "SIM").sum())
+        cg4.metric("Atenção B2B", (df["IS_B2B"] == "SIM").sum())
+
+        st.divider()
+
+        st.subheader("⏳ Filtro Operacional por Aging")
         col_ag1, _ = st.columns([1, 2])
         aging_options = ["Todos"] + sorted(list(df["AGING"].dropna().astype(str).unique()))
-        selected_aging = col_ag1.selectbox("Selecione a faixa de Aging:", options=aging_options)
+        selected_aging = col_ag1.selectbox("Selecione a faixa de Aging para detalhamento:", options=aging_options)
         
         df_view = df if selected_aging == "Todos" else df[df["AGING"].astype(str) == selected_aging]
-        st.divider()
+        st.write("")
 
-        def render_presentation_card(title, emoji, sub_df):
-            st.markdown(f"### {emoji} {title}")
-            stats = get_status_counts(sub_df, status_col="STATUS")
-            
-            c1, c2, c3, c4, c5 = st.columns(5)
-            c1.metric(f"Total {title}", stats["Total"])
-            c2.metric("Acionados", stats["Acionado"])
-            c3.metric("Iniciados", stats["Iniciado"])
-            c4.metric("Tramitados", stats["Tramitado"])
-            c5.metric("Encerrados", stats["Encerrado"])
+        def render_presentation_card(title, emoji, sub_df, color_theme):
+            with st.container(border=True):
+                st.markdown(f"<h3 style='color: {color_theme};'>{emoji} {title}</h3>", unsafe_allow_html=True)
+                stats = get_status_counts(sub_df, status_col="STATUS")
+                
+                c1, c2, c3, c4, c5 = st.columns(5)
+                c1.metric(f"Total na Fila", stats["Total"])
+                c2.metric("🔴 Acionados", stats["Acionado"])
+                c3.metric("🟡 Iniciados", stats["Iniciado"])
+                c4.metric("🔵 Tramitados", stats["Tramitado"])
+                c5.metric("🟢 Encerrados", stats["Encerrado"])
 
-            if not sub_df.empty:
-                with st.expander(f"Ver lista detalhada de {title} ({len(sub_df)} registros)"):
-                    cols_show = [c for c in ["TSK", "TEMPO_DO_CHAMADO", "ANEL_ABERTO", "DWDM", "NE_ID", "QUADRANTE", "STATUS", "RESUMO", "TECNICO", "OBS"] if c in sub_df.columns]
-                    st.dataframe(sub_df[cols_show], use_container_width=True)
-            else:
-                st.caption(f"Nenhum registro ativo para {title} com o filtro atual.")
+                if not sub_df.empty:
+                    status_df = pd.DataFrame({
+                        "Status": ["Acionados", "Iniciados", "Tramitados", "Encerrados"],
+                        "Quantidade": [stats["Acionado"], stats["Iniciado"], stats["Tramitado"], stats["Encerrado"]]
+                    }).set_index("Status")
+                    
+                    col_chart, col_table = st.columns([1, 3])
+                    with col_chart:
+                        st.write("**Distribuição**")
+                        st.bar_chart(status_df, use_container_width=True, color=color_theme)
+                    with col_table:
+                        st.write("**Detalhamento**")
+                        with st.expander(f"Visualizar os {len(sub_df)} registros em tabela visual"):
+                            cols_show = [c for c in ["TSK", "TEMPO_DO_CHAMADO", "ANEL_ABERTO", "DWDM", "NE_ID", "QUADRANTE", "STATUS", "RESUMO", "TECNICO"] if c in sub_df.columns]
+                            st.dataframe(sub_df[cols_show], use_container_width=True, hide_index=True)
+                else:
+                    st.success(f"Nenhum incidente crítico para {title} pendente nesta faixa de Aging.")
             st.write("")
 
-        # 1. DWDM
-        df_dwdm = df_view[df_view["DWDM"] == "SIM"]
-        render_presentation_card("Equipamentos DWDM", "🟣", df_dwdm)
-        st.divider()
-
-        # 2. Anéis Abertos
+        # 1. Anéis Abertos
         df_aneis = df_view[df_view["ANEL_ABERTO"] == "SIM"]
-        render_presentation_card("Anéis Abertos (Grafana x FMT)", "🔴", df_aneis)
-        st.divider()
+        render_presentation_card("Anéis Abertos (Alto Impacto)", "🚨", df_aneis, "#DC2626")
+
+        # 2. DWDM
+        df_dwdm = df_view[df_view["DWDM"] == "SIM"]
+        render_presentation_card("Equipamentos DWDM (Alta Capacidade)", "🟣", df_dwdm, "#7C3AED")
 
         # 3. B2B
         df_b2b_view = df_view[df_view["IS_B2B"] == "SIM"]
-        render_presentation_card("Casos B2B (Fixa / Móvel)", "🔵", df_b2b_view)
-        st.divider()
+        render_presentation_card("Casos B2B Corporativo (SLA)", "💼", df_b2b_view, "#2563EB")
 
         # 4. CRC
         df_crc_view = df_view[df_view["IS_CRC"] == "SIM"]
-        render_presentation_card("Casos Histórico CRC", "🟢", df_crc_view)
-
-# ==========================================
-# ABA 9: MÉTRICAS & TRÂMITES
-# ==========================================
-elif menu == "📊 Métricas & Trâmites":
-    st.title("📊 Resumo Geral de Trâmites & Pipeline Operacional")
-    df = load_table("backlog_fixa")
-
-    if df.empty:
-        st.info("Nenhuma base carregada na nuvem.")
-    else:
-        stats_total = get_status_counts(df, status_col="STATUS")
-        
-        m1, m2, m3, m4, m5 = st.columns(5)
-        m1.metric("Total Equipamentos FMT", stats_total["Total"])
-        m2.metric("Acionados", stats_total["Acionado"])
-        m3.metric("Iniciados / Campo", stats_total["Iniciado"])
-        m4.metric("Tramitados / Aguardando", stats_total["Tramitado"])
-        m5.metric("Encerrados", stats_total["Encerrado"])
-
-        st.divider()
-
-        g1, g2 = st.columns(2)
-        with g1:
-            st.subheader("Volume por Quadrante (Top 10)")
-            if "QUADRANTE" in df.columns:
-                st.bar_chart(df["QUADRANTE"].value_counts().head(10))
-        with g2:
-            st.subheader("Volume por Status")
-            if "STATUS" in df.columns:
-                st.bar_chart(df["STATUS"].value_counts())
+        render_presentation_card("Casos com Histórico CRC", "🟢", df_crc_view, "#16A34A")
 
 # ==========================================
 # ABA 10: BASE GERAL FMT
