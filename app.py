@@ -337,7 +337,7 @@ if menu == "👤 Gestão de Usuários (Admin)":
 # ==========================================
 elif menu == "📥 Upload & Processamento":
     st.title("📥 Ingestão, Fusão e Cruzamento")
-    st.caption("FUSÃO ATIVA: O sistema puxará automaticamente os chamados faltantes da FMMT para o Backlog da Fixa.")
+    st.caption("FUSÃO ATIVA: O sistema puxará os chamados faltantes da FMMT e sinalizará a Origem na Base Fixa.")
 
     st.markdown("### 📊 Status Atual das Bases na Nuvem")
     df_fixa_check = load_table("backlog_fixa")
@@ -413,24 +413,23 @@ elif menu == "📥 Upload & Processamento":
                 # ==========================================================
                 # FUSÃO: PUXA OS CHAMADOS FALTANTES DA FMMT PARA A FIXA
                 # ==========================================================
-                dict_fmt = extrair_colunas(df_fmt_raw)
+                df_fmt_base = pd.DataFrame(extrair_colunas(df_fmt_raw))
+                df_fmt_base["ORIGEM"] = "FMT"
                 
                 df_fmmt_process = df_fmmt_raw if f_fmmt else load_table("backlog_fmmt")
                 if not df_fmmt_process.empty:
-                    dict_fmmt = extrair_colunas(df_fmmt_process)
-                    for key in dict_fmt:
-                        dict_fmt[key] = pd.concat([dict_fmt[key], dict_fmmt[key]], ignore_index=True)
+                    df_fmmt_base = pd.DataFrame(extrair_colunas(df_fmmt_process))
+                    df_fmmt_base["ORIGEM"] = "FMMT (Fusão)"
+                    df_fmt = pd.concat([df_fmt_base, df_fmmt_base], ignore_index=True)
+                else:
+                    df_fmt = df_fmt_base
 
-                s_dwdm = dict_fmt["TIPO_EQUIPAMENTO"].apply(lambda val: "SIM" if "DWDM" in str(val).upper().strip() else "NÃO")
-
-                df_fmt = pd.DataFrame({
-                    "TSK": dict_fmt["TSK"], "EVENTO": dict_fmt["EVENTO"], "END_ID": dict_fmt["END_ID"], "NE_ID": dict_fmt["NE_ID"], "TIPO_EQUIPAMENTO": dict_fmt["TIPO_EQUIPAMENTO"], "DWDM": s_dwdm,
-                    "FALHA": dict_fmt["FALHA"], "AGING": dict_fmt["AGING"], "DATA_CRIACAO": dict_fmt["DATA_CRIACAO"], "STATUS": dict_fmt["STATUS"].apply(categorize_status),
-                    "RESUMO": dict_fmt["RESUMO"].apply(lambda r: "Em Campo" if "CAMPO" in str(r).upper() else ("Tramitado" if "TRAMITADO" in str(r).upper() else ("Encerrado" if "ENCERRADO" in str(r).upper() else str(r)))),
-                    "TECNICO": dict_fmt["TECNICO"], "OBS": dict_fmt["OBS"]
-                })
+                s_dwdm = df_fmt["TIPO_EQUIPAMENTO"].apply(lambda val: "SIM" if "DWDM" in str(val).upper().strip() else "NÃO")
+                df_fmt["DWDM"] = s_dwdm
+                df_fmt["STATUS"] = df_fmt["STATUS"].apply(categorize_status)
+                df_fmt["RESUMO"] = df_fmt["RESUMO"].apply(lambda r: "Em Campo" if "CAMPO" in str(r).upper() else ("Tramitado" if "TRAMITADO" in str(r).upper() else ("Encerrado" if "ENCERRADO" in str(r).upper() else str(r))))
                 
-                # GARANTIA DE BASE LIMPA DE DUPLICADAS
+                # GARANTIA DE BASE LIMPA DE DUPLICADAS (Prioridade para quem chegou da FMT)
                 df_fmt = df_fmt[df_fmt["TSK"].astype(str).str.strip() != ""]
                 df_fmt = df_fmt.drop_duplicates(subset=["TSK"], keep='first')
 
@@ -551,25 +550,30 @@ elif menu == "📂 Backlog Operacional (Fixa)":
     else:
         for c in ["DWDM", "ANEL_ABERTO", "IS_B2B", "IS_CRC", "QUADRANTE"]:
             if c not in df.columns: df[c] = "NÃO"
+        if "ORIGEM" not in df.columns: df["ORIGEM"] = "FMT"
 
-        cols_backlog = ["TSK", "EVENTO", "END_ID", "NE_ID", "TEMPO_DO_CHAMADO", "AGING", "FALHA", "STATUS", "OBS", "RESUMO", "TECNICO", "DWDM", "ANEL_ABERTO", "IS_CRC", "QUADRANTE"]
+        cols_backlog = ["TSK", "EVENTO", "END_ID", "NE_ID", "TEMPO_DO_CHAMADO", "AGING", "FALHA", "STATUS", "OBS", "RESUMO", "TECNICO", "DWDM", "ANEL_ABERTO", "IS_CRC", "QUADRANTE", "ORIGEM"]
         for c in cols_backlog:
             if c not in df.columns: df[c] = ""
 
         df_bk_view = df.loc[:, ~df.columns.duplicated()].copy()
 
-        c_f1, c_f2, c_f3, c_f4 = st.columns([1, 1, 1, 2])
+        c_f1, c_f2, c_f3, c_f4, c_f5 = st.columns([1.2, 1.2, 1, 1, 1.5])
         with c_f1:
             st_opts = ["Todos"] + sorted(list(df_bk_view["STATUS"].dropna().unique()))
-            sel_st = st.selectbox("Filtrar Status:", options=st_opts, key="bk_status")
+            sel_st = st.selectbox("Status:", options=st_opts, key="bk_status")
         with c_f2:
-            sel_anel = st.selectbox("Anel Aberto:", options=["Todos", "SIM", "NÃO"], key="bk_anel")
+            origem_opts = ["Todas", "FMT", "FMMT (Fusão)"]
+            sel_origem = st.selectbox("Origem (Base):", options=origem_opts, key="bk_origem")
         with c_f3:
-            sel_dwdm = st.selectbox("DWDM:", options=["Todos", "SIM", "NÃO"], key="bk_dwdm")
+            sel_anel = st.selectbox("Anel:", options=["Todos", "SIM", "NÃO"], key="bk_anel")
         with c_f4:
-            busca_bk = st.text_input("🔍 Busca rápida (NE ID, TSK / Número, Técnico, Quadrante):", key="bk_busca")
+            sel_dwdm = st.selectbox("DWDM:", options=["Todos", "SIM", "NÃO"], key="bk_dwdm")
+        with c_f5:
+            busca_bk = st.text_input("🔍 Busca rápida:", key="bk_busca")
 
         if sel_st != "Todos": df_bk_view = df_bk_view[df_bk_view["STATUS"] == sel_st]
+        if sel_origem != "Todas": df_bk_view = df_bk_view[df_bk_view["ORIGEM"] == sel_origem]
         if sel_anel != "Todos": df_bk_view = df_bk_view[df_bk_view["ANEL_ABERTO"] == sel_anel]
         if sel_dwdm != "Todos": df_bk_view = df_bk_view[df_bk_view["DWDM"] == sel_dwdm]
         if busca_bk: df_bk_view = df_bk_view[df_bk_view.astype(str).apply(lambda row: row.str.contains(busca_bk, case=False).any(), axis=1)]
@@ -590,6 +594,7 @@ elif menu == "📂 Backlog Operacional (Fixa)":
             "ANEL_ABERTO": st.column_config.TextColumn("ANEL", disabled=True),
             "IS_CRC": st.column_config.TextColumn("CRC", disabled=True),
             "QUADRANTE": st.column_config.TextColumn("QDRs", disabled=True),
+            "ORIGEM": st.column_config.TextColumn("Origem", disabled=True),
         }
 
         edited_bk = st.data_editor(df_bk_view[cols_backlog], column_config=column_config, use_container_width=True, height=560, key="backlog_editor_unique")
@@ -735,6 +740,30 @@ elif menu == "🔄 Handover (Entrantes/Saintes)":
 
         st.divider()
 
+        col_btn1, col_btn2 = st.columns([1, 2])
+        with col_btn1:
+            output_ho = io.BytesIO()
+            with pd.ExcelWriter(output_ho, engine="openpyxl") as writer:
+                if not df_entrantes.empty:
+                    df_entrantes.to_excel(writer, index=False, sheet_name="Entrantes (Novos)")
+                else:
+                    pd.DataFrame({"Mensagem": ["Nenhum chamado entrante nesta atualização."]}).to_excel(writer, index=False, sheet_name="Entrantes (Novos)")
+                
+                if not df_saintes.empty:
+                    df_saintes.to_excel(writer, index=False, sheet_name="Saintes (Saíram)")
+                else:
+                    pd.DataFrame({"Mensagem": ["Nenhum chamado sainte nesta atualização."]}).to_excel(writer, index=False, sheet_name="Saintes (Saíram)")
+
+            st.download_button(
+                label="📥 Baixar Relatório de Handover (.xlsx)", 
+                data=output_ho.getvalue(), 
+                file_name=f"Handover_Operacional_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx", 
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                type="primary",
+                use_container_width=True
+            )
+
+        st.write("")
         t1, t2 = st.tabs(["🟢 Ver Entrantes", "🔴 Ver Saintes"])
 
         with t1:
