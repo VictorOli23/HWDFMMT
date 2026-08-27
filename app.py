@@ -139,7 +139,7 @@ if not st.session_state['logged_in']:
     st.stop()
 
 # ==========================================
-# 4. FUNÇÕES DE BANCO DE DADOS
+# 4. FUNÇÕES DE BANCO DE DADOS E LIMPEZA
 # ==========================================
 def upsert_quadrantes(df_quad):
     col_end = next((c for c in df_quad.columns if "END" in str(c).upper()), df_quad.columns[0])
@@ -175,42 +175,25 @@ def upsert_crc(df_crc):
     col_end = next((c for c in cols if "END" in c), cols[min(2, len(cols)-1)])
     col_status = next((c for c in cols if "STATUS" in c), cols[min(3, len(cols)-1)])
     col_aging = next((c for c in cols if "AGING" in c), None)
-    
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    novos, atualizados = 0, 0
     with engine.connect() as conn:
         for _, row in df_crc.iterrows():
             tsk_val = str(row.get(col_tsk, "")).strip()
             if not tsk_val or tsk_val.lower() in ["nan", "none", ""]: continue
-            ne_val = str(row.get(col_ne, ""))
-            end_val = str(row.get(col_end, ""))
-            st_val = str(row.get(col_status, ""))
-            aging_val = str(row.get(col_aging, "")) if col_aging else ""
-            
+            ne_val = str(row.get(col_ne, "")); end_val = str(row.get(col_end, ""))
+            st_val = str(row.get(col_status, "")); aging_val = str(row.get(col_aging, "")) if col_aging else ""
             exists = conn.execute(text("SELECT tsk FROM crc_historico WHERE tsk = :t"), {"t": tsk_val}).fetchone()
             if exists:
-                conn.execute(text("""
-                    UPDATE crc_historico SET ne_id=:n, end_id=:e, status=:s, aging=:a, data_atualizacao=:d WHERE tsk=:t
-                """), {"n": ne_val, "e": end_val, "s": st_val, "a": aging_val, "d": now, "t": tsk_val})
-                atualizados += 1
+                conn.execute(text("""UPDATE crc_historico SET ne_id=:n, end_id=:e, status=:s, aging=:a, data_atualizacao=:d WHERE tsk=:t"""), {"n": ne_val, "e": end_val, "s": st_val, "a": aging_val, "d": now, "t": tsk_val})
             else:
-                conn.execute(text("""
-                    INSERT INTO crc_historico (tsk, ne_id, end_id, status, aging, descricao, data_atualizacao)
-                    VALUES (:t, :n, :e, :s, :a, '', :d)
-                """), {"t": tsk_val, "n": ne_val, "e": end_val, "s": st_val, "a": aging_val, "d": now})
-                novos += 1
+                conn.execute(text("""INSERT INTO crc_historico (tsk, ne_id, end_id, status, aging, descricao, data_atualizacao) VALUES (:t, :n, :e, :s, :a, '', :d)"""), {"t": tsk_val, "n": ne_val, "e": end_val, "s": st_val, "a": aging_val, "d": now})
         conn.commit()
-    return novos, atualizados
 
 @st.cache_data(ttl=900, show_spinner=False)
 def get_crc_data():
     with engine.connect() as conn:
-        df = pd.read_sql_query("SELECT * FROM crc_historico", conn)
-    return df
+        return pd.read_sql_query("SELECT * FROM crc_historico", conn)
 
-# ==========================================
-# 5. FUNÇÕES DE PROCESSAMENTO AVANÇADO
-# ==========================================
 def load_file(file, target_sheet_hints=None):
     if file is None: return pd.DataFrame()
     
@@ -218,11 +201,9 @@ def load_file(file, target_sheet_hints=None):
         content = file.getvalue().decode('utf-8', errors='ignore')
         lines = content.splitlines()
         
-        # Remoção do lixo do Grafana (sep=,)
-        if len(lines) > 0 and lines[0].lower().startswith("sep="):
-            lines = lines[1:]
-            
-        clean_content = "\n".join(lines)
+        # AQUI ESTÁ A CORREÇÃO DO GRAFANA: IGNORA LIXO E CARACTERES INVISÍVEIS (BOM)
+        clean_lines = [l for l in lines if "sep=" not in l.lower()[:10]]
+        clean_content = "\n".join(clean_lines)
         
         try:
             df = pd.read_csv(io.StringIO(clean_content), sep=',')
@@ -242,6 +223,7 @@ def load_file(file, target_sheet_hints=None):
                     break
         df = pd.read_excel(xls, sheet_name=sheet_to_load)
         
+        # Corrige colunas zoadas
         if len(df) > 0 and any(str(c).startswith("Unnamed") for c in df.columns[:3]):
             for idx in range(min(15, len(df))):
                 row_vals = [str(x).upper() for x in df.iloc[idx].values]
@@ -282,9 +264,7 @@ def calculate_tempo_chamado(row):
         try:
             dt = pd.to_datetime(data_cria, dayfirst=True)
             diff = datetime.now() - dt
-            days = diff.days
-            hours, remainder = divmod(diff.seconds, 3600)
-            mins, _ = divmod(remainder, 60)
+            days = diff.days; hours, remainder = divmod(diff.seconds, 3600); mins, _ = divmod(remainder, 60)
             return f"{days}d {hours:02d}h {mins:02d}m"
         except: pass
     ag_val = str(row.get("AGING", "")).strip()
@@ -313,58 +293,36 @@ abas_disponiveis = [
     "🗄️ Histórico CRC"
 ]
 
-if st.session_state['is_admin']:
-    abas_disponiveis.insert(0, "👤 Gestão de Usuários (Admin)")
-
+if st.session_state['is_admin']: abas_disponiveis.insert(0, "👤 Gestão de Usuários (Admin)")
 menu = st.sidebar.radio("Navegação", abas_disponiveis)
 
 # ==========================================
-# ABA: GESTÃO DE USUÁRIOS (SÓ ADMIN)
+# ABA: GESTÃO DE USUÁRIOS
 # ==========================================
 if menu == "👤 Gestão de Usuários (Admin)":
-    st.title("👤 Gerenciamento de Acessos da Equipe")
-    st.caption("Apenas a conta Master tem acesso a esta área.")
-
+    st.title("👤 Gerenciamento de Acessos")
     with st.expander("➕ Cadastrar Novo Usuário", expanded=True):
         with st.form("add_user_form"):
-            new_user = st.text_input("Usuário de login (Ex: wesley.noc)")
+            new_user = st.text_input("Usuário (Ex: wesley.noc)")
             new_name = st.text_input("Nome Completo")
             new_role = st.selectbox("Cargo", ["Técnico NOC", "Coordenador", "Analista", "Supervisor"])
             new_pass = st.text_input("Senha", type="password")
-            
             if st.form_submit_button("Cadastrar Usuário"):
-                if not new_user or not new_pass:
-                    st.error("Usuário e senha são obrigatórios.")
-                else:
-                    hashed_pw = bcrypt.hashpw(new_pass.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
-                    with engine.connect() as conn:
-                        try:
-                            conn.execute(text("""
-                                INSERT INTO usuarios_equipe (username, password_hash, nome_completo, cargo) 
-                                VALUES (:u, :p, :n, :c)
-                            """), {"u": new_user, "p": hashed_pw, "n": new_name, "c": new_role})
-                            conn.commit()
-                            st.success(f"Usuário {new_user} criado com sucesso!")
-                        except Exception as e:
-                            st.error("Erro: Esse nome de usuário já existe.")
-
-    st.subheader("Lista de Usuários Cadastrados")
-    with engine.connect() as conn:
-        df_users = pd.read_sql_query("SELECT username, nome_completo, cargo FROM usuarios_equipe", conn)
-    if not df_users.empty:
-        st.dataframe(df_users, use_container_width=True)
-    else:
-        st.info("Nenhum técnico cadastrado ainda.")
+                hashed_pw = bcrypt.hashpw(new_pass.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+                with engine.connect() as conn:
+                    try:
+                        conn.execute(text("INSERT INTO usuarios_equipe (username, password_hash, nome_completo, cargo) VALUES (:u, :p, :n, :c)"), {"u": new_user, "p": hashed_pw, "n": new_name, "c": new_role})
+                        conn.commit()
+                        st.success("Criado!")
+                    except: st.error("Usuário já existe.")
 
 # ==========================================
 # ABA: UPLOAD & PROCESSAMENTO
 # ==========================================
 elif menu == "📥 Upload & Processamento":
-    st.title("📥 Ingestão, Cruzamento e Regras de Negócio")
-    st.caption("Novo Sistema de Busca Universal (Omni-Search): Imune a trocas de colunas do Grafana e FMMT.")
-
-    st.markdown("### 📊 Status Atual das Bases na Nuvem")
+    st.title("📥 Ingestão e Cruzamento de Anéis")
     
+    st.markdown("### 📊 Status Atual das Bases na Nuvem")
     df_fixa_check = load_table("backlog_fixa")
     df_fmmt_check = load_table("backlog_fmmt")
     df_movel_check = load_table("backlog_movel")
@@ -372,34 +330,24 @@ elif menu == "📥 Upload & Processamento":
     df_grafana_check = load_table("backlog_grafana")
 
     c1, c2, c3, c4 = st.columns(4)
-    
     with c1:
         if not df_fixa_check.empty:
-            st.success(f"🟢 **Base Fixa Ativa**\n\nTotal: {len(df_fixa_check)} reg.")
+            st.success(f"🟢 **Fixa:** {len(df_fixa_check)} reg."); 
             if st.button("🗑️ Limpar Fixa"): drop_table("backlog_fixa"); st.rerun()
-        else: st.info("⚪ **Base Fixa:** Vazia")
-
         if not df_fmmt_check.empty:
-            st.success(f"🟢 **Base FMMT Ativa**\n\nTotal: {len(df_fmmt_check)} reg.")
+            st.success(f"🟢 **FMMT:** {len(df_fmmt_check)} reg."); 
             if st.button("🗑️ Limpar FMMT"): drop_table("backlog_fmmt"); st.rerun()
-        else: st.info("⚪ **Base FMMT:** Vazia")
-
     with c2:
         if not df_movel_check.empty:
-            st.success(f"🟢 **Base Móvel Ativa**\n\nTotal: {len(df_movel_check)} reg.")
+            st.success(f"🟢 **Móvel:** {len(df_movel_check)} reg."); 
             if st.button("🗑️ Limpar Móvel"): drop_table("backlog_movel"); st.rerun()
-        else: st.info("⚪ **Base Móvel:** Vazia")
-
         if not df_b2b_check.empty:
-            st.success(f"🟢 **Base B2B Ativa**\n\nTotal: {len(df_b2b_check)} reg.")
+            st.success(f"🟢 **B2B:** {len(df_b2b_check)} reg."); 
             if st.button("🗑️ Limpar B2B"): drop_table("backlog_b2b"); st.rerun()
-        else: st.info("⚪ **Base B2B:** Vazia")
-
     with c3:
         if not df_grafana_check.empty:
-            st.success(f"🟢 **Base Grafana Ativa**\n\nTotal: {len(df_grafana_check)} reg.")
+            st.success(f"🟢 **Grafana:** {len(df_grafana_check)} reg."); 
             if st.button("🗑️ Limpar Grafana"): drop_table("backlog_grafana"); st.rerun()
-        else: st.info("⚪ **Grafana:** Vazio")
 
     st.markdown("---")
 
@@ -421,9 +369,8 @@ elif menu == "📥 Upload & Processamento":
         if not f_fmt:
             st.error("A Base Total Fixa FMT é obrigatória.")
         else:
-            with st.spinner("Analisando as planilhas e executando a Busca Universal (Omni-Search)..."):
+            with st.spinner("Analisando planilhas e executando o PROCV Universal..."):
                 
-                # UPLOADS
                 df_fmt_raw = load_file(f_fmt, ["BACKLOG", "FMT", "TASK", "EVENTO"])
                 
                 if f_fmmt:
@@ -442,7 +389,7 @@ elif menu == "📥 Upload & Processamento":
                     df_crc_raw = load_file(f_crc, ["CRC"])
                     if not df_crc_raw.empty: upsert_crc(df_crc_raw)
 
-                # Extrai colunas da Fixa
+                # Extrai as colunas da Fixa
                 s_tsk = get_single_series(df_fmt_raw, ["NÚMERO", "NUMERO", "TSK", "CHAMADO", "ORDEM"], "")
                 s_evento = get_single_series(df_fmt_raw, ["EVENTO", "ICTTTID", "INCIDENTE"], "")
                 s_end_id = get_single_series(df_fmt_raw, ["END ID", "END_ID", "SITE"], "")
@@ -473,42 +420,31 @@ elif menu == "📥 Upload & Processamento":
                 df_fmt["TEMPO_DO_CHAMADO"] = df_fmt.apply(calculate_tempo_chamado, axis=1)
 
                 # ==========================================================
-                # OMNI-SEARCH (BUSCA UNIVERSAL CONTRA TROCA DE COLUNAS)
+                # OMNI-SEARCH UNIVERSAL (CONTRA NOMES E EVENTOS)
                 # ==========================================================
                 global_pool = set()
                 
                 df_graf_cloud = load_table("backlog_grafana")
                 if not df_graf_cloud.empty:
-                    # Amassa todo o arquivo do Grafana em um grande conjunto de textos (independente de coluna)
                     for col in df_graf_cloud.columns:
                         global_pool.update(df_graf_cloud[col].dropna().astype(str).str.strip().str.upper())
 
                 df_fmmt_cloud = load_table("backlog_fmmt")
                 if not df_fmmt_cloud.empty:
-                    # Amassa todo o arquivo FMMT/Smart no mesmo conjunto
                     for col in df_fmmt_cloud.columns:
                         global_pool.update(df_fmmt_cloud[col].dropna().astype(str).str.strip().str.upper())
 
-                # Limpeza de lixos e termos muito comuns
-                lixos_comuns = ["", "NAN", "NONE", "NULL", "-", "ROUTER", "SWITCH", "HUB", "SIM", "NÃO"]
-                for lixo in lixos_comuns:
-                    global_pool.discard(lixo)
+                lixos = ["", "NAN", "NONE", "NULL", "-", "ROUTER", "SWITCH", "SIM", "NÃO"]
+                for lx in lixos: global_pool.discard(lx)
 
                 def check_anel_omni_search(row):
-                    if not global_pool:
-                        return "NÃO"
+                    if not global_pool: return "NÃO"
                     
                     ne_fmt = str(row.get("NE_ID", "")).strip().upper()
                     ev_fmt = str(row.get("EVENTO", "")).strip().upper()
                     
-                    # 1. O ticket (Evento) existe em QUALQUER lugar do Grafana ou FMMT?
-                    if len(ev_fmt) >= 5 and ev_fmt in global_pool:
-                        return "SIM"
-                        
-                    # 2. O Nome do Equipamento (NE_ID) existe em QUALQUER lugar do Grafana ou FMMT?
-                    if len(ne_fmt) >= 5 and ne_fmt in global_pool:
-                        return "SIM"
-                        
+                    if len(ev_fmt) >= 5 and ev_fmt in global_pool: return "SIM"
+                    if len(ne_fmt) >= 5 and ne_fmt in global_pool: return "SIM"
                     return "NÃO"
 
                 df_fmt["ANEL_ABERTO"] = df_fmt.apply(check_anel_omni_search, axis=1)
@@ -526,7 +462,7 @@ elif menu == "📥 Upload & Processamento":
                 
                 df_fmt.to_sql('backlog_fixa', engine, if_exists='replace', index=False)
                 aneis_count = (df_fmt["ANEL_ABERTO"] == "SIM").sum()
-                st.success(f"✅ Base Fixa Processada: {len(df_fmt)} reg. A Busca Universal carregou {len(global_pool)} chaves únicas de busca e encontrou {aneis_count} Anéis.")
+                st.success(f"✅ Base Fixa Processada: Encontrados {aneis_count} Anéis Abertos!")
 
                 # 2. BASE B2B
                 if f_b2b:
@@ -550,12 +486,6 @@ elif menu == "📥 Upload & Processamento":
                     df_b2b_proc["TEMPO_DO_CHAMADO"] = df_b2b_proc.apply(calculate_tempo_chamado, axis=1)
                     df_b2b_proc.to_sql('backlog_b2b', engine, if_exists='replace', index=False)
 
-                    df_fmt_atual = load_table('backlog_fixa')
-                    b2b_tokens = set(df_b2b_proc["TSK"].dropna().astype(str).str.strip().str.upper()).union(set(df_b2b_proc["NE_ID"].dropna().astype(str).str.strip().str.upper()))
-                    df_fmt_atual["IS_B2B"] = df_fmt_atual.apply(lambda r: "SIM" if str(r["TSK"]).upper() in b2b_tokens or str(r["NE_ID"]).upper() in b2b_tokens else "NÃO", axis=1)
-                    df_fmt_atual.to_sql('backlog_fixa', engine, if_exists='replace', index=False)
-
-                # 3. BASE MÓVEL BACKLOG
                 if f_movel_backlog:
                     df_movel_raw = load_file(f_movel_backlog, ["MOVEL", "MOBILE", "BACKLOG"])
                     s_tsk_m = get_single_series(df_movel_raw, ["NÚMERO", "NUMERO", "TSK", "CHAMADO", "ORDEM"], "")
