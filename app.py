@@ -380,7 +380,7 @@ if menu == "👤 Gestão de Usuários (Admin)":
 # ==========================================
 elif menu == "📥 Upload & Processamento":
     st.title("📥 Ingestão, Fusão e Cruzamento")
-    st.caption("FUSÃO ATIVA: O sistema puxará os chamados faltantes da FMMT e sinalizará a Origem na Base Fixa.")
+    st.caption("FUSÃO ATIVA: Retenção de edições manuais garantida. Edições não são perdidas no re-upload.")
 
     st.markdown("### 📊 Status Atual das Bases na Nuvem")
     df_fixa_check = load_table("backlog_fixa")
@@ -429,8 +429,13 @@ elif menu == "📥 Upload & Processamento":
         if not f_fmt:
             st.error("A Base Total Fixa FMT é obrigatória.")
         else:
-            with st.spinner("Realizando a Fusão das bases e Cruzamento de Anéis..."):
+            with st.spinner("Realizando a Fusão das bases, preservando edições e cruzando Anéis..."):
                 st.cache_data.clear() 
+                
+                # PRESERVAR BASES ANTIGAS
+                df_old_fixa = load_table("backlog_fixa")
+                df_old_movel = load_table("backlog_movel")
+                df_old_b2b = load_table("backlog_b2b")
                 
                 # UPLOADS BÁSICOS
                 df_fmt_raw = load_file(f_fmt, ["BACKLOG", "FMT", "TASK", "EVENTO"])
@@ -456,7 +461,7 @@ elif menu == "📥 Upload & Processamento":
                 # ==========================================================
                 # FUSÃO: PUXA OS CHAMADOS FALTANTES DA FMMT PARA A FIXA
                 # ==========================================================
-                quad_map = get_quadrantes_map() # Mapa central de quadrantes
+                quad_map = get_quadrantes_map()
                 
                 df_fmt_base = pd.DataFrame(extrair_colunas(df_fmt_raw))
                 df_fmt_base["ORIGEM"] = "FMT"
@@ -474,15 +479,23 @@ elif menu == "📥 Upload & Processamento":
                 df_fmt["STATUS"] = df_fmt["STATUS"].apply(categorize_status)
                 df_fmt["RESUMO"] = df_fmt["RESUMO"].apply(lambda r: "Em Campo" if "CAMPO" in str(r).upper() else ("Tramitado" if "TRAMITADO" in str(r).upper() else ("Encerrado" if "ENCERRADO" in str(r).upper() else str(r))))
                 
-                # GARANTIA DE BASE LIMPA DE DUPLICADAS (Prioridade para quem chegou da FMT)
                 df_fmt = df_fmt[df_fmt["TSK"].astype(str).str.strip() != ""]
                 df_fmt = df_fmt.drop_duplicates(subset=["TSK"], keep='first')
 
                 df_fmt["QUADRANTE"] = df_fmt["END_ID"].astype(str).str.strip().str.upper().map(quad_map)
-                df_fmt["QUADRANTE"] = df_fmt["QUADRANTE"].fillna(
-                    df_fmt["END_ID"].astype(str).apply(lambda x: re.search(r'(QD\s*\d+|ANF\s*\d+)', str(x), re.IGNORECASE).group(0).upper() if re.search(r'(QD\s*\d+|ANF\s*\d+)', str(x), re.IGNORECASE) else "NÃO INFORMADO")
-                )
+                df_fmt["QUADRANTE"] = df_fmt["QUADRANTE"].fillna(df_fmt["END_ID"].astype(str).apply(lambda x: re.search(r'(QD\s*\d+|ANF\s*\d+)', str(x), re.IGNORECASE).group(0).upper() if re.search(r'(QD\s*\d+|ANF\s*\d+)', str(x), re.IGNORECASE) else "NÃO INFORMADO"))
                 df_fmt["TEMPO_DO_CHAMADO"] = df_fmt.apply(calculate_tempo_chamado, axis=1)
+
+                # ROTINA DE RETENÇÃO DE DADOS (FIXA)
+                if not df_old_fixa.empty:
+                    dict_st = dict(zip(df_old_fixa["TSK"], df_old_fixa["STATUS"]))
+                    dict_res = dict(zip(df_old_fixa["TSK"], df_old_fixa["RESUMO"]))
+                    dict_tec = dict(zip(df_old_fixa["TSK"], df_old_fixa["TECNICO"]))
+                    dict_obs = dict(zip(df_old_fixa["TSK"], df_old_fixa["OBS"]))
+                    df_fmt["STATUS"] = df_fmt.apply(lambda r: dict_st.get(r["TSK"], r["STATUS"]), axis=1)
+                    df_fmt["RESUMO"] = df_fmt.apply(lambda r: dict_res.get(r["TSK"], r["RESUMO"]), axis=1)
+                    df_fmt["TECNICO"] = df_fmt.apply(lambda r: dict_tec.get(r["TSK"], r["TECNICO"]), axis=1)
+                    df_fmt["OBS"] = df_fmt.apply(lambda r: dict_obs.get(r["TSK"], r["OBS"]), axis=1)
 
                 # ==========================================================
                 # OMNI-SEARCH EXCLUSIVO CONTRA GRAFANA
@@ -505,10 +518,8 @@ elif menu == "📥 Upload & Processamento":
 
                 def check_anel_omni_search(row):
                     if not global_names and not global_events: return "NÃO"
-                    
                     ne_fmt = str(row.get("NE_ID", "")).strip().upper()
                     ev_fmt = str(row.get("EVENTO", "")).strip().upper()
-                    
                     if len(ev_fmt) >= 5 and ev_fmt in global_events: return "SIM"
                     if len(ne_fmt) >= 5 and ne_fmt in global_names: return "SIM"
                     return "NÃO"
@@ -519,7 +530,7 @@ elif menu == "📥 Upload & Processamento":
                 crc_tsks = set(df_crc_db["tsk"].dropna().astype(str).str.strip().str.upper()) if not df_crc_db.empty else set()
                 df_fmt["IS_CRC"] = df_fmt["TSK"].astype(str).str.strip().str.upper().apply(lambda x: "SIM" if x in crc_tsks else "NÃO")
 
-                # B2B Processado em Memória
+                # B2B Processado em Memória e com Retenção
                 df_fmt["IS_B2B"] = "NÃO" 
                 if f_b2b:
                     df_b2b_raw = load_file(f_b2b, ["B2B", "CORPORATIVO"])
@@ -543,27 +554,37 @@ elif menu == "📥 Upload & Processamento":
                     df_b2b_proc["QUADRANTE"] = df_b2b_proc["END_ID"].astype(str).str.strip().str.upper().map(quad_map)
                     df_b2b_proc["QUADRANTE"] = df_b2b_proc["QUADRANTE"].fillna(df_b2b_proc["END_ID"].astype(str).apply(lambda x: re.search(r'(QD\s*\d+|ANF\s*\d+)', str(x), re.IGNORECASE).group(0).upper() if re.search(r'(QD\s*\d+|ANF\s*\d+)', str(x), re.IGNORECASE) else "NÃO INFORMADO"))
                     df_b2b_proc["TEMPO_DO_CHAMADO"] = df_b2b_proc.apply(calculate_tempo_chamado, axis=1)
+
+                    if not df_old_b2b.empty:
+                        d_st = dict(zip(df_old_b2b["TSK"], df_old_b2b["STATUS"]))
+                        d_rs = dict(zip(df_old_b2b["TSK"], df_old_b2b["RESUMO"]))
+                        d_tc = dict(zip(df_old_b2b["TSK"], df_old_b2b["TECNICO"]))
+                        d_ob = dict(zip(df_old_b2b["TSK"], df_old_b2b["OBS"]))
+                        df_b2b_proc["STATUS"] = df_b2b_proc.apply(lambda r: d_st.get(r["TSK"], r["STATUS"]), axis=1)
+                        df_b2b_proc["RESUMO"] = df_b2b_proc.apply(lambda r: d_rs.get(r["TSK"], r["RESUMO"]), axis=1)
+                        df_b2b_proc["TECNICO"] = df_b2b_proc.apply(lambda r: d_tc.get(r["TSK"], r["TECNICO"]), axis=1)
+                        df_b2b_proc["OBS"] = df_b2b_proc.apply(lambda r: d_ob.get(r["TSK"], r["OBS"]), axis=1)
+
                     df_b2b_proc.to_sql('backlog_b2b', engine, if_exists='replace', index=False)
 
                     b2b_tokens = set(df_b2b_proc["TSK"].dropna().astype(str).str.strip().str.upper()).union(set(df_b2b_proc["NE_ID"].dropna().astype(str).str.strip().str.upper()))
                     df_fmt["IS_B2B"] = df_fmt.apply(lambda r: "SIM" if str(r["TSK"]).upper() in b2b_tokens or str(r["NE_ID"]).upper() in b2b_tokens else "NÃO", axis=1)
                 else:
-                    df_b2b_cloud = load_table("backlog_b2b")
-                    if not df_b2b_cloud.empty:
-                        b2b_tokens = set(df_b2b_cloud["TSK"].dropna().astype(str).str.strip().str.upper()).union(set(df_b2b_cloud["NE_ID"].dropna().astype(str).str.strip().str.upper()))
+                    if not df_old_b2b.empty:
+                        b2b_tokens = set(df_old_b2b["TSK"].dropna().astype(str).str.strip().str.upper()).union(set(df_old_b2b["NE_ID"].dropna().astype(str).str.strip().str.upper()))
                         df_fmt["IS_B2B"] = df_fmt.apply(lambda r: "SIM" if str(r["TSK"]).upper() in b2b_tokens or str(r["NE_ID"]).upper() in b2b_tokens else "NÃO", axis=1)
 
                 try:
                     with engine.connect() as conn:
                         conn.execute(text("DROP TABLE IF EXISTS backlog_fixa_previous"))
-                        conn.execute(text("CREATE TABLE backlog_fixa_previous AS SELECT * FROM backlog_fixa"))
-                        conn.commit()
+                        if not df_old_fixa.empty:
+                            df_old_fixa.to_sql('backlog_fixa_previous', engine, if_exists='replace', index=False)
                 except: pass
                 
                 df_fmt.to_sql('backlog_fixa', engine, if_exists='replace', index=False)
                 aneis_count = (df_fmt["ANEL_ABERTO"] == "SIM").sum()
                 
-                st.success(f"✅ Fusão Concluída! Chamados faltantes da FMMT foram copiados.\nAnéis Abertos encontrados no total: {aneis_count}")
+                st.success(f"✅ Fusão e Retenção Concluídas! Suas edições foram salvas e mescladas.\nAnéis Abertos encontrados: {aneis_count}")
 
                 # 3. BASE MÓVEL BACKLOG
                 if f_movel_backlog:
@@ -588,6 +609,17 @@ elif menu == "📥 Upload & Processamento":
                     df_movel["QUADRANTE"] = df_movel["END_ID"].astype(str).str.strip().str.upper().map(quad_map)
                     df_movel["QUADRANTE"] = df_movel["QUADRANTE"].fillna(df_movel["END_ID"].astype(str).apply(lambda x: re.search(r'(QD\s*\d+|ANF\s*\d+)', str(x), re.IGNORECASE).group(0).upper() if re.search(r'(QD\s*\d+|ANF\s*\d+)', str(x), re.IGNORECASE) else "NÃO INFORMADO"))
                     df_movel["TEMPO_DO_CHAMADO"] = df_movel.apply(calculate_tempo_chamado, axis=1)
+
+                    if not df_old_movel.empty:
+                        d_st_m = dict(zip(df_old_movel["TSK"], df_old_movel["STATUS"]))
+                        d_rs_m = dict(zip(df_old_movel["TSK"], df_old_movel["RESUMO"]))
+                        d_tc_m = dict(zip(df_old_movel["TSK"], df_old_movel["TECNICO"]))
+                        d_ob_m = dict(zip(df_old_movel["TSK"], df_old_movel["OBS"]))
+                        df_movel["STATUS"] = df_movel.apply(lambda r: d_st_m.get(r["TSK"], r["STATUS"]), axis=1)
+                        df_movel["RESUMO"] = df_movel.apply(lambda r: d_rs_m.get(r["TSK"], r["RESUMO"]), axis=1)
+                        df_movel["TECNICO"] = df_movel.apply(lambda r: d_tc_m.get(r["TSK"], r["TECNICO"]), axis=1)
+                        df_movel["OBS"] = df_movel.apply(lambda r: d_ob_m.get(r["TSK"], r["OBS"]), axis=1)
+
                     df_movel.to_sql('backlog_movel', engine, if_exists='replace', index=False)
 
                 st.cache_data.clear() 
