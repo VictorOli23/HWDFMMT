@@ -213,9 +213,7 @@ def load_file(file, target_sheet_hints=None):
             try: df = pd.read_csv(io.StringIO(clean_content), sep=';', on_bad_lines='skip')
             except: df = pd.DataFrame()
         
-        # REMOÇÃO DE DUPLICADAS: Exige linhas unicas em tudo
-        df = df.drop_duplicates()
-        return df
+        return df.drop_duplicates()
     else:
         xls = pd.ExcelFile(file)
         sheet_to_load = xls.sheet_names[0]
@@ -234,9 +232,7 @@ def load_file(file, target_sheet_hints=None):
                     df = df.iloc[idx+1:].reset_index(drop=True)
                     break
                     
-        # REMOÇÃO DE DUPLICADAS
-        df = df.drop_duplicates()
-        return df
+        return df.drop_duplicates()
 
 def get_single_series(df, col_name_hints, fallback_val=""):
     col_found = next((c for hint in col_name_hints for c in df.columns if hint in str(c).upper().strip()), None)
@@ -326,7 +322,7 @@ if menu == "👤 Gestão de Usuários (Admin)":
 # ==========================================
 elif menu == "📥 Upload & Processamento":
     st.title("📥 Ingestão, Cruzamento e Regras de Negócio")
-    st.caption("Auto-Deduplicação Ativada: Duplicatas são eliminadas automaticamente antes do Duplo PROCV.")
+    st.caption("O cruzamento agora elimina lixos invisíveis, sobreposições de Cache e executa o Duplo PROCV.")
 
     st.markdown("### 📊 Status Atual das Bases na Nuvem")
     df_fixa_check = load_table("backlog_fixa")
@@ -375,14 +371,18 @@ elif menu == "📥 Upload & Processamento":
         if not f_fmt:
             st.error("A Base Total Fixa FMT é obrigatória.")
         else:
-            with st.spinner("Removendo duplicadas e executando cruzamento avançado..."):
+            with st.spinner("Removendo duplicadas e resolvendo os anéis com Omni-Search..."):
+                # LIMPA O CACHE DE CARA PARA IMPEDIR SOBREPOSIÇÃO DE ARQUIVOS
+                st.cache_data.clear() 
                 
                 df_fmt_raw = load_file(f_fmt, ["BACKLOG", "FMT", "TASK", "EVENTO"])
                 
+                df_fmmt_raw = pd.DataFrame()
                 if f_fmmt:
                     df_fmmt_raw = load_file(f_fmmt, ["FMMT", "MOVEL", "SMART"])
                     if not df_fmmt_raw.empty: df_fmmt_raw.to_sql('backlog_fmmt', engine, if_exists='replace', index=False)
 
+                df_graf_raw = pd.DataFrame()
                 if f_grafana:
                     df_graf_raw = load_file(f_grafana, ["GRAFANA", "ANEIS", "ALARMES"])
                     if not df_graf_raw.empty: df_graf_raw.to_sql('backlog_grafana', engine, if_exists='replace', index=False)
@@ -418,8 +418,8 @@ elif menu == "📥 Upload & Processamento":
                     "TECNICO": s_tecnico, "OBS": s_obs
                 })
                 
-                # GARANTIA MÁXIMA DE NÃO DUPLICAÇÃO DA BASE FIXA PELO "TSK" E "EVENTO"
-                df_fmt = df_fmt.drop_duplicates(subset=["TSK", "EVENTO"], keep='first')
+                # GARANTIA DE BASE LIMPA DE DUPLICADAS
+                df_fmt = df_fmt.drop_duplicates(subset=["TSK"], keep='first')
 
                 quad_map = get_quadrantes_map()
                 df_fmt["QUADRANTE"] = df_fmt["END_ID"].astype(str).str.strip().str.upper().map(quad_map)
@@ -429,24 +429,28 @@ elif menu == "📥 Upload & Processamento":
                 df_fmt["TEMPO_DO_CHAMADO"] = df_fmt.apply(calculate_tempo_chamado, axis=1)
 
                 # ==========================================================
-                # O DUPLO PROCV COM NOMES E EVENTOS (INDEPENDENTE DA COLUNA)
+                # O DUPLO PROCV BLINDADO CONTRA CACHE (OMNI-SEARCH)
                 # ==========================================================
                 global_names = set()
                 global_events = set()
                 
-                df_graf_cloud = load_table("backlog_grafana")
-                if not df_graf_cloud.empty:
-                    col_graf_ne = next((c for c in df_graf_cloud.columns if any(k in str(c).upper() for k in ["NENAME", "NE ID", "ELEMENTO"])), None)
-                    col_graf_eve = next((c for c in df_graf_cloud.columns if any(k in str(c).upper() for k in ["ICTTTID", "EVENTO", "INCIDENTE"])), None)
-                    if col_graf_ne: global_names.update(df_graf_cloud[col_graf_ne].dropna().astype(str).str.strip().str.upper())
-                    if col_graf_eve: global_events.update(df_graf_cloud[col_graf_eve].dropna().astype(str).str.strip().str.upper())
+                # Puxa o Grafana local se upado agora, senão busca da nuvem
+                df_graf_process = df_graf_raw if f_grafana else load_table("backlog_grafana")
+                if not df_graf_process.empty:
+                    cols = [str(c).upper().strip() for c in df_graf_process.columns]
+                    col_graf_ne = next((c for c in cols if any(k in c for k in ["NENAME", "NE ID", "ELEMENTO"])), None)
+                    col_graf_eve = next((c for c in cols if any(k in c for k in ["ICTTTID", "EVENTO", "INCIDENTE"])), None)
+                    if col_graf_ne: global_names.update(df_graf_process.iloc[:, cols.index(col_graf_ne)].dropna().astype(str).str.strip().str.upper())
+                    if col_graf_eve: global_events.update(df_graf_process.iloc[:, cols.index(col_graf_eve)].dropna().astype(str).str.strip().str.upper())
 
-                df_fmmt_cloud = load_table("backlog_fmmt")
-                if not df_fmmt_cloud.empty:
-                    col_fmmt_ne = next((c for c in df_fmmt_cloud.columns if any(k in str(c).upper() for k in ["NE ID", "NENAME", "DESCRICAO"])), None)
-                    col_fmmt_eve = next((c for c in df_fmmt_cloud.columns if any(k in str(c).upper() for k in ["EVENTO", "ICTTTID", "INCIDENTE"])), None)
-                    if col_fmmt_ne: global_names.update(df_fmmt_cloud[col_fmmt_ne].dropna().astype(str).str.strip().str.upper())
-                    if col_fmmt_eve: global_events.update(df_fmmt_cloud[col_fmmt_eve].dropna().astype(str).str.strip().str.upper())
+                # Puxa a FMMT local se upada agora, senão busca da nuvem
+                df_fmmt_process = df_fmmt_raw if f_fmmt else load_table("backlog_fmmt")
+                if not df_fmmt_process.empty:
+                    cols = [str(c).upper().strip() for c in df_fmmt_process.columns]
+                    col_fmmt_ne = next((c for c in cols if any(k in c for k in ["NE ID", "NENAME", "DESCRICAO"])), None)
+                    col_fmmt_eve = next((c for c in cols if any(k in c for k in ["EVENTO", "ICTTTID", "INCIDENTE"])), None)
+                    if col_fmmt_ne: global_names.update(df_fmmt_process.iloc[:, cols.index(col_fmmt_ne)].dropna().astype(str).str.strip().str.upper())
+                    if col_fmmt_eve: global_events.update(df_fmmt_process.iloc[:, cols.index(col_fmmt_eve)].dropna().astype(str).str.strip().str.upper())
 
                 lixos = ["", "NAN", "NONE", "NULL", "-", "ROUTER", "SWITCH", "SIM", "NÃO", "SEM TSK"]
                 for lx in lixos: 
@@ -459,7 +463,6 @@ elif menu == "📥 Upload & Processamento":
                     ne_fmt = str(row.get("NE_ID", "")).strip().upper()
                     ev_fmt = str(row.get("EVENTO", "")).strip().upper()
                     
-                    # Logica EXATA: Ou bate o ID do evento, Ou bate o Nome
                     if len(ev_fmt) >= 5 and ev_fmt in global_events: return "SIM"
                     if len(ne_fmt) >= 5 and ne_fmt in global_names: return "SIM"
                     return "NÃO"
@@ -470,6 +473,28 @@ elif menu == "📥 Upload & Processamento":
                 crc_tsks = set(df_crc_db["tsk"].dropna().astype(str).str.strip().str.upper()) if not df_crc_db.empty else set()
                 df_fmt["IS_CRC"] = df_fmt["TSK"].astype(str).str.strip().str.upper().apply(lambda x: "SIM" if x in crc_tsks else "NÃO")
 
+                # B2B Processado em Memória para não sobrescrever a Fixa!
+                df_fmt["IS_B2B"] = "NÃO" 
+                if f_b2b:
+                    df_b2b_raw = load_file(f_b2b, ["B2B", "CORPORATIVO"])
+                    s_b2b_tsk = get_single_series(df_b2b_raw, ["NÚMERO", "NUMERO", "TSK", "CHAMADO", "ORDEM"], "")
+                    s_b2b_ne = get_single_series(df_b2b_raw, ["NE ID DO EVENTO", "NE ID", "NENAME"], "")
+                    
+                    df_b2b_proc = pd.DataFrame({"TSK": s_b2b_tsk, "NE_ID": s_b2b_ne})
+                    df_b2b_proc = df_b2b_proc.drop_duplicates(subset=["TSK"], keep='first')
+                    df_b2b_proc.to_sql('backlog_b2b', engine, if_exists='replace', index=False)
+
+                    b2b_tokens = set(df_b2b_proc["TSK"].dropna().astype(str).str.strip().str.upper()).union(set(df_b2b_proc["NE_ID"].dropna().astype(str).str.strip().str.upper()))
+                    df_fmt["IS_B2B"] = df_fmt.apply(lambda r: "SIM" if str(r["TSK"]).upper() in b2b_tokens or str(r["NE_ID"]).upper() in b2b_tokens else "NÃO", axis=1)
+                else:
+                    df_b2b_cloud = load_table("backlog_b2b")
+                    if not df_b2b_cloud.empty:
+                        b2b_tokens = set(df_b2b_cloud["TSK"].dropna().astype(str).str.strip().str.upper()).union(set(df_b2b_cloud["NE_ID"].dropna().astype(str).str.strip().str.upper()))
+                        df_fmt["IS_B2B"] = df_fmt.apply(lambda r: "SIM" if str(r["TSK"]).upper() in b2b_tokens or str(r["NE_ID"]).upper() in b2b_tokens else "NÃO", axis=1)
+
+                # ===============================================
+                # SALVA A BASE FIXA NA NUVEM SÓ NO FINAL
+                # ===============================================
                 try:
                     with engine.connect() as conn:
                         conn.execute(text("DROP TABLE IF EXISTS backlog_fixa_previous"))
@@ -479,36 +504,7 @@ elif menu == "📥 Upload & Processamento":
                 
                 df_fmt.to_sql('backlog_fixa', engine, if_exists='replace', index=False)
                 aneis_count = (df_fmt["ANEL_ABERTO"] == "SIM").sum()
-                st.success(f"✅ Base Fixa Processada (duplicadas removidas)! Anéis Abertos identificados: {aneis_count}.")
-
-                # 2. BASE B2B
-                if f_b2b:
-                    df_b2b_raw = load_file(f_b2b, ["B2B", "CORPORATIVO"])
-                    s_b2b_tsk = get_single_series(df_b2b_raw, ["NÚMERO", "NUMERO", "TSK", "CHAMADO", "ORDEM"], "")
-                    s_b2b_end = get_single_series(df_b2b_raw, ["END ID", "END_ID", "SITE"], "")
-                    s_b2b_ne = get_single_series(df_b2b_raw, ["NE ID DO EVENTO", "NE ID", "NENAME"], "")
-                    s_b2b_status = get_single_series(df_b2b_raw, ["STATUS"], "Não Acionado")
-                    s_b2b_falha = get_single_series(df_b2b_raw, ["ALARME", "FALHA"], "")
-                    s_b2b_aging = get_single_series(df_b2b_raw, ["AGING"], "-")
-                    s_b2b_cria = get_single_series(df_b2b_raw, ["DATA DE CRIAÇÃO", "DATA_CRIACAO", "CRIA"], "")
-                    s_b2b_tec = get_single_series(df_b2b_raw, ["NOME DO TÉCNICO", "NOME TÉCNICO CAMPO", "TÉCNICO", "TECNICO"], "")
-                    s_b2b_res = get_single_series(df_b2b_raw, ["RESUMO", "OBSERVAÇÕES"], "")
-                    s_b2b_obs = get_single_series(df_b2b_raw, ["OBS", "NOTAS"], "")
-
-                    df_b2b_proc = pd.DataFrame({
-                        "TSK": s_b2b_tsk, "END_ID": s_b2b_end, "NE_ID": s_b2b_ne, "FALHA": s_b2b_falha, "AGING": s_b2b_aging, "DATA_CRIACAO": s_b2b_cria,
-                        "STATUS": s_b2b_status.apply(categorize_status), "RESUMO": s_b2b_res.apply(lambda r: "Em Campo" if "CAMPO" in str(r).upper() else ("Tramitado" if "TRAMITADO" in str(r).upper() else ("Encerrado" if "ENCERRADO" in str(r).upper() else str(r)))),
-                        "TECNICO": s_b2b_tec, "OBS": s_b2b_obs
-                    })
-                    
-                    df_b2b_proc = df_b2b_proc.drop_duplicates(subset=["TSK"], keep='first')
-                    df_b2b_proc["TEMPO_DO_CHAMADO"] = df_b2b_proc.apply(calculate_tempo_chamado, axis=1)
-                    df_b2b_proc.to_sql('backlog_b2b', engine, if_exists='replace', index=False)
-
-                    df_fmt_atual = load_table('backlog_fixa')
-                    b2b_tokens = set(df_b2b_proc["TSK"].dropna().astype(str).str.strip().str.upper()).union(set(df_b2b_proc["NE_ID"].dropna().astype(str).str.strip().str.upper()))
-                    df_fmt_atual["IS_B2B"] = df_fmt_atual.apply(lambda r: "SIM" if str(r["TSK"]).upper() in b2b_tokens or str(r["NE_ID"]).upper() in b2b_tokens else "NÃO", axis=1)
-                    df_fmt_atual.to_sql('backlog_fixa', engine, if_exists='replace', index=False)
+                st.success(f"✅ Processamento Blindado concluído! Identificados {aneis_count} Anéis Abertos.")
 
                 # 3. BASE MÓVEL BACKLOG
                 if f_movel_backlog:
@@ -529,7 +525,6 @@ elif menu == "📥 Upload & Processamento":
                         "STATUS": s_status_m.apply(categorize_status), "RESUMO": s_resumo_m.apply(lambda r: "Em Campo" if "CAMPO" in str(r).upper() else ("Tramitado" if "TRAMITADO" in str(r).upper() else ("Encerrado" if "ENCERRADO" in str(r).upper() else str(r)))),
                         "TECNICO": s_tec_m, "OBS": s_obs_m
                     })
-                    
                     df_movel = df_movel.drop_duplicates(subset=["TSK"], keep='first')
                     df_movel["TEMPO_DO_CHAMADO"] = df_movel.apply(calculate_tempo_chamado, axis=1)
                     df_movel.to_sql('backlog_movel', engine, if_exists='replace', index=False)
@@ -796,7 +791,7 @@ elif menu == "💼 Gestão B2B":
             st_b2b_opts = ["Todos"] + sorted(list(df_b2b_view["STATUS"].dropna().unique()))
             sel_b2b_st = st.selectbox("Filtrar por Status B2B:", options=st_b2b_opts)
         with c_b2:
-            busca_b2b = text_input("🔍 Busca B2B (Número / TSK, NE ID, Falha, Técnico):")
+            busca_b2b = st.text_input("🔍 Busca B2B (Número / TSK, NE ID, Falha, Técnico):")
 
         if sel_b2b_st != "Todos": df_b2b_view = df_b2b_view[df_b2b_view["STATUS"] == sel_b2b_st]
         if busca_b2b: df_b2b_view = df_b2b_view[df_b2b_view.astype(str).apply(lambda row: row.str.contains(busca_b2b, case=False).any(), axis=1)]
