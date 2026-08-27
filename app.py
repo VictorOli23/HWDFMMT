@@ -872,7 +872,6 @@ elif menu == "📺 Apresentação Executiva":
 
         st.markdown("### 📍 Visão Geográfica (Top 10 Quadrantes Impactados)")
         if "QUADRANTE" in df_view.columns and not df_view.empty:
-            # Pega o Top 10 ignorando os que não têm quadrante mapeado, se preferir
             quad_counts = df_view[df_view["QUADRANTE"] != "NÃO INFORMADO"]["QUADRANTE"].value_counts().head(10)
             if not quad_counts.empty:
                 st.bar_chart(quad_counts, color="#F59E0B")
@@ -901,10 +900,23 @@ elif menu == "📺 Apresentação Executiva":
                         "Quantidade": [stats["Acionado"], stats["Iniciado"], stats["Tramitado"], stats["Encerrado"]]
                     }).set_index("Status")
                     
-                    col_chart, col_table = st.columns([1, 3])
-                    with col_chart:
-                        st.write("**Distribuição**")
+                    col_chart1, col_chart2, col_table = st.columns([1, 1.5, 3])
+                    
+                    with col_chart1:
+                        st.write("**Distribuição de Status**")
                         st.bar_chart(status_df, use_container_width=True, color=color_theme)
+                        
+                    with col_chart2:
+                        st.write("**Top 5 Quadrantes**")
+                        if "QUADRANTE" in sub_df.columns:
+                            quad_counts_card = sub_df[sub_df["QUADRANTE"] != "NÃO INFORMADO"]["QUADRANTE"].value_counts().head(5)
+                            if not quad_counts_card.empty:
+                                st.bar_chart(quad_counts_card, use_container_width=True, color="#F59E0B")
+                            else:
+                                st.caption("Sem dados de quadrante.")
+                        else:
+                            st.caption("Sem dados de quadrante.")
+                            
                     with col_table:
                         st.write("**Detalhamento**")
                         with st.expander(f"Visualizar os {len(sub_df)} registros em tabela visual"):
@@ -922,9 +934,23 @@ elif menu == "📺 Apresentação Executiva":
         df_dwdm = df_view[df_view["DWDM"] == "SIM"]
         render_presentation_card("Equipamentos DWDM (Alta Capacidade)", "🟣", df_dwdm, "#7C3AED")
 
-        # 3. B2B
+        # 3. B2B Separado por Fixa e Móvel
         df_b2b_view = df_view[df_view["IS_B2B"] == "SIM"]
-        render_presentation_card("Casos B2B Corporativo (SLA)", "💼", df_b2b_view, "#2563EB")
+        
+        def is_fixa(val):
+            v = str(val).strip().upper()
+            return v in ["", "NAN", "NONE", "NULL", "-"]
+            
+        if not df_b2b_view.empty:
+            mask_fixa = df_b2b_view["NE_ID"].apply(is_fixa)
+            df_b2b_fixa = df_b2b_view[mask_fixa]
+            df_b2b_movel = df_b2b_view[~mask_fixa]
+        else:
+            df_b2b_fixa = pd.DataFrame(columns=df_b2b_view.columns)
+            df_b2b_movel = pd.DataFrame(columns=df_b2b_view.columns)
+
+        render_presentation_card("B2B Fixa (Corporativo)", "🏢", df_b2b_fixa, "#0284C7")
+        render_presentation_card("B2B Móvel (Corporativo)", "📱", df_b2b_movel, "#2563EB")
 
         # 4. CRC
         df_crc_view = df_view[df_view["IS_CRC"] == "SIM"]
