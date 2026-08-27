@@ -306,7 +306,7 @@ menu = st.sidebar.radio("Navegação", abas_disponiveis)
 # ==========================================
 if menu == "👤 Gestão de Usuários (Admin)":
     st.title("👤 Gerenciamento de Acessos da Equipe")
-    st.caption("Apenas a conta Master tiene acesso a esta área.")
+    st.caption("Apenas a conta Master tem acesso a esta área.")
 
     with st.expander("➕ Cadastrar Novo Usuário", expanded=True):
         with st.form("add_user_form"):
@@ -343,10 +343,10 @@ if menu == "👤 Gestão de Usuários (Admin)":
 # ABA: UPLOAD & PROCESSAMENTO
 # ==========================================
 elif menu == "📥 Upload & Processamento":
-    st.title("📥 Ingestão e Gerenciamento de Bases na Nuvem")
-    st.caption("Envie suas planilhas para atualizar o banco de dados global da equipe.")
+    st.title("📥 Ingestão, Cruzamento e Regras de Negócio")
+    st.caption("Faça upload das bases reais. O sistema cruzará os anéis através do Duplo PROCV (Por Equipamento e Por ictTTid/Evento).")
 
-    st.markdown("### 📊 Status Atual de Todas as Bases na Nuvem")
+    st.markdown("### 📊 Status Atual das Bases na Nuvem")
     
     df_fixa_check = load_table("backlog_fixa")
     df_fmmt_check = load_table("backlog_fmmt")
@@ -448,6 +448,7 @@ elif menu == "📥 Upload & Processamento":
 
                 # Extrai colunas da Fixa
                 s_tsk = get_single_series(df_fmt_raw, ["NÚMERO", "NUMERO", "TSK", "CHAMADO", "ORDEM"], "")
+                s_evento = get_single_series(df_fmt_raw, ["EVENTO", "ICTTTID", "INCIDENTE"], "") # <--- NOVA COLUNA EVENTO
                 s_end_id = get_single_series(df_fmt_raw, ["END ID", "END_ID", "SITE"], "")
                 s_ne_id = get_single_series(df_fmt_raw, ["NE ID DO EVENTO", "NE ID", "NENAME"], "")
                 s_tipo_equip = get_single_series(df_fmt_raw, ["TIPO DO EQUIPAMENTO", "TIPO NE", "EQUIPAMENTO"], "")
@@ -462,10 +463,19 @@ elif menu == "📥 Upload & Processamento":
                 s_dwdm = s_tipo_equip.apply(lambda val: "SIM" if "DWDM" in str(val).upper().strip() else "NÃO")
 
                 df_fmt = pd.DataFrame({
-                    "TSK": s_tsk, "END_ID": s_end_id, "NE_ID": s_ne_id, "TIPO_EQUIPAMENTO": s_tipo_equip, "DWDM": s_dwdm,
-                    "FALHA": s_falha, "AGING": s_aging, "DATA_CRIACAO": s_data_cria, "STATUS": s_status_raw.apply(categorize_status),
+                    "TSK": s_tsk,
+                    "EVENTO": s_evento, # Adicionado o Evento
+                    "END_ID": s_end_id, 
+                    "NE_ID": s_ne_id, 
+                    "TIPO_EQUIPAMENTO": s_tipo_equip, 
+                    "DWDM": s_dwdm,
+                    "FALHA": s_falha, 
+                    "AGING": s_aging, 
+                    "DATA_CRIACAO": s_data_cria, 
+                    "STATUS": s_status_raw.apply(categorize_status),
                     "RESUMO": s_resumo.apply(lambda r: "Em Campo" if "CAMPO" in str(r).upper() else ("Tramitado" if "TRAMITADO" in str(r).upper() else ("Encerrado" if "ENCERRADO" in str(r).upper() else str(r)))),
-                    "TECNICO": s_tecnico, "OBS": s_obs
+                    "TECNICO": s_tecnico, 
+                    "OBS": s_obs
                 })
 
                 quad_map = get_quadrantes_map()
@@ -476,33 +486,54 @@ elif menu == "📥 Upload & Processamento":
 
                 df_fmt["TEMPO_DO_CHAMADO"] = df_fmt.apply(calculate_tempo_chamado, axis=1)
 
-                # PROCV ANÉIS USANDO NUVEM (FMMT + GRAFANA)
-                smart_set = set()
+                # ==========================================================
+                # DUPLO PROCV EXATO (CORRESP) - NENAME E EVENTO (ictTTid)
+                # ==========================================================
+                smart_ne_set = set()
+                smart_eve_set = set()
+
                 df_fmmt_cloud = load_table("backlog_fmmt")
                 if not df_fmmt_cloud.empty:
                     df_fmmt_cloud.columns = [str(c).upper().strip() for c in df_fmmt_cloud.columns]
-                    col_s = next((c for c in df_fmmt_cloud.columns if any(k in c for k in ["NE ID", "NENAME", "DESCRICAO", "ELEMENTO"])), df_fmmt_cloud.columns[0])
-                    smart_set = set(df_fmmt_cloud[col_s].dropna().astype(str).str.strip().str.upper())
+                    # Busca NE
+                    col_smart_ne = next((c for c in df_fmmt_cloud.columns if any(k in c for k in ["NE ID", "NENAME", "DESCRICAO", "ELEMENTO"])), None)
+                    if col_smart_ne: smart_ne_set.update(df_fmmt_cloud[col_smart_ne].dropna().astype(str).str.strip().str.upper())
+                    # Busca Evento/ictTTid
+                    col_smart_eve = next((c for c in df_fmmt_cloud.columns if any(k in c for k in ["EVENTO", "ICTTTID", "INCIDENTE"])), None)
+                    if col_smart_eve: smart_eve_set.update(df_fmmt_cloud[col_smart_eve].dropna().astype(str).str.strip().str.upper())
 
                 df_graf_cloud = load_table("backlog_grafana")
                 if not df_graf_cloud.empty:
                     df_graf_cloud.columns = [str(c).upper().strip() for c in df_graf_cloud.columns]
-                    col_g = next((c for c in df_graf_cloud.columns if any(k in c for k in ["NE ID", "NENAME", "ELEMENTO"])), df_graf_cloud.columns[0])
-                    smart_set.update(df_graf_cloud[col_g].dropna().astype(str).str.strip().str.upper())
+                    # Busca NE
+                    col_graf_ne = next((c for c in df_graf_cloud.columns if any(k in c for k in ["NE ID", "NENAME", "ELEMENTO"])), None)
+                    if col_graf_ne: smart_ne_set.update(df_graf_cloud[col_graf_ne].dropna().astype(str).str.strip().str.upper())
+                    # Busca Evento/ictTTid
+                    col_graf_eve = next((c for c in df_graf_cloud.columns if any(k in c for k in ["ICTTTID", "EVENTO"])), None)
+                    if col_graf_eve: smart_eve_set.update(df_graf_cloud[col_graf_eve].dropna().astype(str).str.strip().str.upper())
 
-                smart_set.discard(""); smart_set.discard("NAN"); smart_set.discard("NONE"); smart_set.discard("NULL"); smart_set.discard("-")
+                # Limpeza rigorosa para evitar falsos positivos
+                for s in [smart_ne_set, smart_eve_set]:
+                    s.discard(""); s.discard("NAN"); s.discard("NONE"); s.discard("NULL"); s.discard("-")
 
-                def check_anel(row):
-                    if not smart_set: return "NÃO"
+                def check_anel_duplo_procv(row):
+                    # Se as bases SMART/Grafana não têm IDs de referência, retorna NÃO
+                    if not smart_ne_set and not smart_eve_set: return "NÃO"
+                    
                     ne = str(row.get("NE_ID", "")).strip().upper()
-                    end = str(row.get("END_ID", "")).strip().upper()
-                    if ne in ["NAN", "NONE", "NULL", "", "-"]: ne = None
-                    if end in ["NAN", "NONE", "NULL", "", "-"]: end = None
-                    if ne and ne in smart_set: return "SIM"
-                    if end and end in smart_set: return "SIM"
+                    eve = str(row.get("EVENTO", "")).strip().upper()
+                    
+                    # PROCV 1: Pelo ID do Evento (ictTTid)
+                    if eve and eve not in ["NAN", "NONE", "NULL", "-", ""]:
+                        if eve in smart_eve_set: return "SIM"
+                        
+                    # PROCV 2: Pelo Nome do Equipamento (NEName)
+                    if ne and ne not in ["NAN", "NONE", "NULL", "-", ""]:
+                        if ne in smart_ne_set: return "SIM"
+                        
                     return "NÃO"
 
-                df_fmt["ANEL_ABERTO"] = df_fmt.apply(check_anel, axis=1)
+                df_fmt["ANEL_ABERTO"] = df_fmt.apply(check_anel_duplo_procv, axis=1)
 
                 df_crc_db = get_crc_data()
                 crc_tsks = set(df_crc_db["tsk"].dropna().astype(str).str.strip().str.upper()) if not df_crc_db.empty else set()
@@ -516,6 +547,8 @@ elif menu == "📥 Upload & Processamento":
                 except: pass
                 
                 df_fmt.to_sql('backlog_fixa', engine, if_exists='replace', index=False)
+                aneis_count = (df_fmt["ANEL_ABERTO"] == "SIM").sum()
+                st.success(f"✅ Base Fixa Processada: {len(df_fmt)} reg. Cruzamento de Anéis identificou: {aneis_count} casos exatos.")
 
                 # 2. BASE B2B
                 if f_b2b:
