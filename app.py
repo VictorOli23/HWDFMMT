@@ -322,7 +322,7 @@ if menu == "👤 Gestão de Usuários (Admin)":
 # ==========================================
 elif menu == "📥 Upload & Processamento":
     st.title("📥 Ingestão, Cruzamento e Regras de Negócio")
-    st.caption("O cruzamento agora elimina lixos invisíveis, sobreposições de Cache e executa o Duplo PROCV.")
+    st.caption("Correção da auto-referência: Fixa agora cruza os Anéis EXCLUSIVAMENTE contra o Grafana.")
 
     st.markdown("### 📊 Status Atual das Bases na Nuvem")
     df_fixa_check = load_table("backlog_fixa")
@@ -371,8 +371,7 @@ elif menu == "📥 Upload & Processamento":
         if not f_fmt:
             st.error("A Base Total Fixa FMT é obrigatória.")
         else:
-            with st.spinner("Removendo duplicadas e resolvendo os anéis com Omni-Search..."):
-                # LIMPA O CACHE DE CARA PARA IMPEDIR SOBREPOSIÇÃO DE ARQUIVOS
+            with st.spinner("Limpando duplicadas e executando Cruzamento de Anéis contra Grafana..."):
                 st.cache_data.clear() 
                 
                 df_fmt_raw = load_file(f_fmt, ["BACKLOG", "FMT", "TASK", "EVENTO"])
@@ -429,12 +428,12 @@ elif menu == "📥 Upload & Processamento":
                 df_fmt["TEMPO_DO_CHAMADO"] = df_fmt.apply(calculate_tempo_chamado, axis=1)
 
                 # ==========================================================
-                # O DUPLO PROCV BLINDADO CONTRA CACHE (OMNI-SEARCH)
+                # OMNI-SEARCH EXCLUSIVO CONTRA GRAFANA
                 # ==========================================================
                 global_names = set()
                 global_events = set()
                 
-                # Puxa o Grafana local se upado agora, senão busca da nuvem
+                # Para evitar "auto-match" entre FMT e FMMT, Anel na Fixa cruza apenas contra Grafana
                 df_graf_process = df_graf_raw if f_grafana else load_table("backlog_grafana")
                 if not df_graf_process.empty:
                     cols = [str(c).upper().strip() for c in df_graf_process.columns]
@@ -442,15 +441,6 @@ elif menu == "📥 Upload & Processamento":
                     col_graf_eve = next((c for c in cols if any(k in c for k in ["ICTTTID", "EVENTO", "INCIDENTE"])), None)
                     if col_graf_ne: global_names.update(df_graf_process.iloc[:, cols.index(col_graf_ne)].dropna().astype(str).str.strip().str.upper())
                     if col_graf_eve: global_events.update(df_graf_process.iloc[:, cols.index(col_graf_eve)].dropna().astype(str).str.strip().str.upper())
-
-                # Puxa a FMMT local se upada agora, senão busca da nuvem
-                df_fmmt_process = df_fmmt_raw if f_fmmt else load_table("backlog_fmmt")
-                if not df_fmmt_process.empty:
-                    cols = [str(c).upper().strip() for c in df_fmmt_process.columns]
-                    col_fmmt_ne = next((c for c in cols if any(k in c for k in ["NE ID", "NENAME", "DESCRICAO"])), None)
-                    col_fmmt_eve = next((c for c in cols if any(k in c for k in ["EVENTO", "ICTTTID", "INCIDENTE"])), None)
-                    if col_fmmt_ne: global_names.update(df_fmmt_process.iloc[:, cols.index(col_fmmt_ne)].dropna().astype(str).str.strip().str.upper())
-                    if col_fmmt_eve: global_events.update(df_fmmt_process.iloc[:, cols.index(col_fmmt_eve)].dropna().astype(str).str.strip().str.upper())
 
                 lixos = ["", "NAN", "NONE", "NULL", "-", "ROUTER", "SWITCH", "SIM", "NÃO", "SEM TSK"]
                 for lx in lixos: 
@@ -473,7 +463,7 @@ elif menu == "📥 Upload & Processamento":
                 crc_tsks = set(df_crc_db["tsk"].dropna().astype(str).str.strip().str.upper()) if not df_crc_db.empty else set()
                 df_fmt["IS_CRC"] = df_fmt["TSK"].astype(str).str.strip().str.upper().apply(lambda x: "SIM" if x in crc_tsks else "NÃO")
 
-                # B2B Processado em Memória para não sobrescrever a Fixa!
+                # B2B Processado em Memória
                 df_fmt["IS_B2B"] = "NÃO" 
                 if f_b2b:
                     df_b2b_raw = load_file(f_b2b, ["B2B", "CORPORATIVO"])
@@ -492,9 +482,6 @@ elif menu == "📥 Upload & Processamento":
                         b2b_tokens = set(df_b2b_cloud["TSK"].dropna().astype(str).str.strip().str.upper()).union(set(df_b2b_cloud["NE_ID"].dropna().astype(str).str.strip().str.upper()))
                         df_fmt["IS_B2B"] = df_fmt.apply(lambda r: "SIM" if str(r["TSK"]).upper() in b2b_tokens or str(r["NE_ID"]).upper() in b2b_tokens else "NÃO", axis=1)
 
-                # ===============================================
-                # SALVA A BASE FIXA NA NUVEM SÓ NO FINAL
-                # ===============================================
                 try:
                     with engine.connect() as conn:
                         conn.execute(text("DROP TABLE IF EXISTS backlog_fixa_previous"))
@@ -504,7 +491,8 @@ elif menu == "📥 Upload & Processamento":
                 
                 df_fmt.to_sql('backlog_fixa', engine, if_exists='replace', index=False)
                 aneis_count = (df_fmt["ANEL_ABERTO"] == "SIM").sum()
-                st.success(f"✅ Processamento Blindado concluído! Identificados {aneis_count} Anéis Abertos.")
+                
+                st.success(f"✅ Processamento Concluído! \nAnéis Abertos identificados na Fixa: {aneis_count} \n\n*(Diagnóstico de Cache - Fixa processada contra: Grafana {len(df_graf_process) if 'df_graf_process' in locals() else 0} registros)*")
 
                 # 3. BASE MÓVEL BACKLOG
                 if f_movel_backlog:
