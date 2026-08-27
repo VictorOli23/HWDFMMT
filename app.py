@@ -389,6 +389,7 @@ elif menu == "📥 Upload & Processamento":
             with st.spinner("Realizando a Fusão das bases e Cruzamento de Anéis..."):
                 st.cache_data.clear() 
                 
+                # UPLOADS BÁSICOS
                 df_fmt_raw = load_file(f_fmt, ["BACKLOG", "FMT", "TASK", "EVENTO"])
                 
                 df_fmmt_raw = pd.DataFrame()
@@ -849,7 +850,7 @@ elif menu == "📺 Apresentação Executiva":
     if df.empty:
         st.warning("Nenhuma base Fixa carregada na nuvem.")
     else:
-        for c in ["DWDM", "ANEL_ABERTO", "IS_B2B", "IS_CRC"]:
+        for c in ["DWDM", "ANEL_ABERTO", "IS_B2B", "IS_CRC", "QUADRANTE"]:
             if c not in df.columns: df[c] = "NÃO"
 
         st.markdown("### 🌐 Resumo Global da Operação")
@@ -868,6 +869,19 @@ elif menu == "📺 Apresentação Executiva":
         
         df_view = df if selected_aging == "Todos" else df[df["AGING"].astype(str) == selected_aging]
         st.write("")
+
+        st.markdown("### 📍 Visão Geográfica (Top 10 Quadrantes Impactados)")
+        if "QUADRANTE" in df_view.columns and not df_view.empty:
+            # Pega o Top 10 ignorando os que não têm quadrante mapeado, se preferir
+            quad_counts = df_view[df_view["QUADRANTE"] != "NÃO INFORMADO"]["QUADRANTE"].value_counts().head(10)
+            if not quad_counts.empty:
+                st.bar_chart(quad_counts, color="#F59E0B")
+            else:
+                st.info("Nenhum quadrante mapeado para os chamados nesta faixa de Aging.")
+        else:
+            st.info("Dados de quadrante indisponíveis para este filtro.")
+            
+        st.divider()
 
         def render_presentation_card(title, emoji, sub_df, color_theme):
             with st.container(border=True):
