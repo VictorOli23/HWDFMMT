@@ -68,7 +68,6 @@ def init_cloud_db():
 
 init_cloud_db()
 
-# A MÁGICA DA VELOCIDADE AQUI: O CACHE! (Guarda na RAM por 15 minutos)
 @st.cache_data(ttl=900, show_spinner=False)
 def load_table(table_name):
     try:
@@ -82,7 +81,7 @@ def drop_table(table_name):
         with engine.connect() as conn:
             conn.execute(text(f"DROP TABLE IF EXISTS {table_name}"))
             conn.commit()
-        st.cache_data.clear() # Limpa o cache após excluir
+        st.cache_data.clear()
         return True
     except Exception:
         return False
@@ -348,7 +347,7 @@ if menu == "👤 Gestão de Usuários (Admin)":
 # ==========================================
 elif menu == "📥 Upload & Processamento":
     st.title("📥 Ingestão, Cruzamento e Regras de Negócio")
-    st.caption("Faça upload das bases reais. O sistema cruzará os anéis através do Duplo PROCV.")
+    st.caption("O cruzamento de Anéis agora exige 100% de precisão (Nome do Equipamento + Evento/ictTTid).")
 
     st.markdown("### 📊 Status Atual das Bases na Nuvem")
     
@@ -364,40 +363,40 @@ elif menu == "📥 Upload & Processamento":
     
     with c1:
         if not df_fixa_check.empty:
-            st.success(f"🟢 **Base Fixa**\n{len(df_fixa_check)} reg.")
+            st.success(f"🟢 **Base Fixa Ativa**\n\nTotal: {len(df_fixa_check)} reg.")
             if st.button("🗑️ Limpar Fixa"): drop_table("backlog_fixa"); st.rerun()
         else: st.info("⚪ **Base Fixa:** Vazia")
 
         if not df_fmmt_check.empty:
-            st.success(f"🟢 **Base FMMT**\n{len(df_fmmt_check)} reg.")
+            st.success(f"🟢 **Base FMMT Ativa**\n\nTotal: {len(df_fmmt_check)} reg.")
             if st.button("🗑️ Limpar FMMT"): drop_table("backlog_fmmt"); st.rerun()
         else: st.info("⚪ **Base FMMT:** Vazia")
 
     with c2:
         if not df_movel_check.empty:
-            st.success(f"🟢 **Base Móvel**\n{len(df_movel_check)} reg.")
+            st.success(f"🟢 **Base Móvel Ativa**\n\nTotal: {len(df_movel_check)} reg.")
             if st.button("🗑️ Limpar Móvel"): drop_table("backlog_movel"); st.rerun()
         else: st.info("⚪ **Base Móvel:** Vazia")
 
         if not df_b2b_check.empty:
-            st.success(f"🟢 **Base B2B**\n{len(df_b2b_check)} reg.")
+            st.success(f"🟢 **Base B2B Ativa**\n\nTotal: {len(df_b2b_check)} reg.")
             if st.button("🗑️ Limpar B2B"): drop_table("backlog_b2b"); st.rerun()
         else: st.info("⚪ **Base B2B:** Vazia")
 
     with c3:
         if not df_grafana_check.empty:
-            st.success(f"🟢 **Base Grafana**\n{len(df_grafana_check)} reg.")
+            st.success(f"🟢 **Base Grafana Ativa**\n\nTotal: {len(df_grafana_check)} reg.")
             if st.button("🗑️ Limpar Grafana"): drop_table("backlog_grafana"); st.rerun()
         else: st.info("⚪ **Grafana:** Vazio")
 
         if not df_quad_check.empty:
-            st.success(f"🟢 **Quadrantes**\n{len(df_quad_check)} reg.")
+            st.success(f"🟢 **Quadrantes**\n\nTotal: {len(df_quad_check)} reg.")
             if st.button("🗑️ Limpar Quadrantes"): drop_table("quadrantes"); st.rerun()
         else: st.info("⚪ **Quadrantes:** Vazio")
 
     with c4:
         if not df_crc_check.empty:
-            st.success(f"🟢 **Histórico CRC**\n{len(df_crc_check)} reg.")
+            st.success(f"🟢 **Histórico CRC**\n\nTotal: {len(df_crc_check)} reg.")
             if st.button("🗑️ Limpar CRC"): drop_table("crc_historico"); st.rerun()
         else: st.info("⚪ **CRC:** Vazio")
 
@@ -406,24 +405,24 @@ elif menu == "📥 Upload & Processamento":
     col1, col2 = st.columns(2)
     with col1:
         st.subheader("Bases Operacionais")
-        f_fmt = st.file_uploader("1. Base Fixa FMT", type=["xlsx", "csv"])
+        f_fmt = st.file_uploader("1. Base Fixa FMT (Ex: u_task_evento)", type=["xlsx", "csv"])
         f_fmmt = st.file_uploader("2. Base Móvel FMMT (SMART / Anéis)", type=["xlsx", "csv"])
         f_movel_backlog = st.file_uploader("3. Base Móvel (Backlog Dedicado)", type=["xlsx", "csv"])
         f_b2b = st.file_uploader("4. Base B2B (Corporativo)", type=["xlsx", "csv"])
 
     with col2:
         st.subheader("Bases de Apoio & Correlação")
-        f_grafana = st.file_uploader("5. Base Grafana", type=["xlsx", "csv"])
+        f_grafana = st.file_uploader("5. Base Grafana (Alarmes / Anéis)", type=["xlsx", "csv"])
         f_quadrantes = st.file_uploader("6. Base Quadrantes", type=["xlsx", "csv"])
         f_crc = st.file_uploader("7. Base CRC (Histórico)", type=["xlsx", "csv"])
 
-    if st.button("🚀 Processar e Enviar Todas para a Nuvem", type="primary", use_container_width=True):
+    if st.button("🚀 Processar e Enviar para a Nuvem", type="primary", use_container_width=True):
         if not f_fmt:
             st.error("A Base Total Fixa FMT é obrigatória.")
         else:
-            with st.spinner("Lendo planilhas, mapeando colunas e salvando no banco de dados..."):
+            with st.spinner("Lendo planilhas e processando cruzamento duplo (NEName + ictTTid)..."):
                 
-                # 1. BASE FIXA
+                # 1. PROCESSAMENTO DAS BASES E UPLOADS
                 df_fmt_raw = load_file(f_fmt, ["BACKLOG", "FMT", "TASK", "EVENTO"])
                 
                 if f_fmmt:
@@ -446,7 +445,7 @@ elif menu == "📥 Upload & Processamento":
                 s_tsk = get_single_series(df_fmt_raw, ["NÚMERO", "NUMERO", "TSK", "CHAMADO", "ORDEM"], "")
                 s_evento = get_single_series(df_fmt_raw, ["EVENTO", "ICTTTID", "INCIDENTE"], "")
                 s_end_id = get_single_series(df_fmt_raw, ["END ID", "END_ID", "SITE"], "")
-                s_ne_id = get_single_series(df_fmt_raw, ["NE ID DO EVENTO", "NE ID", "NENAME"], "")
+                s_ne_id = get_single_series(df_fmt_raw, ["NE ID DO EVENTO", "NE ID", "NENAME", "NE ID DESCRIÇÃO"], "")
                 s_tipo_equip = get_single_series(df_fmt_raw, ["TIPO DO EQUIPAMENTO", "TIPO NE", "EQUIPAMENTO"], "")
                 s_status_raw = get_single_series(df_fmt_raw, ["STATUS"], "Não Acionado")
                 s_falha = get_single_series(df_fmt_raw, ["ALARME", "FALHA"], "")
@@ -459,10 +458,19 @@ elif menu == "📥 Upload & Processamento":
                 s_dwdm = s_tipo_equip.apply(lambda val: "SIM" if "DWDM" in str(val).upper().strip() else "NÃO")
 
                 df_fmt = pd.DataFrame({
-                    "TSK": s_tsk, "EVENTO": s_evento, "END_ID": s_end_id, "NE_ID": s_ne_id, "TIPO_EQUIPAMENTO": s_tipo_equip, "DWDM": s_dwdm,
-                    "FALHA": s_falha, "AGING": s_aging, "DATA_CRIACAO": s_data_cria, "STATUS": s_status_raw.apply(categorize_status),
+                    "TSK": s_tsk,
+                    "EVENTO": s_evento,
+                    "END_ID": s_end_id,
+                    "NE_ID": s_ne_id,
+                    "TIPO_EQUIPAMENTO": s_tipo_equip,
+                    "DWDM": s_dwdm,
+                    "FALHA": s_falha,
+                    "AGING": s_aging,
+                    "DATA_CRIACAO": s_data_cria,
+                    "STATUS": s_status_raw.apply(categorize_status),
                     "RESUMO": s_resumo.apply(lambda r: "Em Campo" if "CAMPO" in str(r).upper() else ("Tramitado" if "TRAMITADO" in str(r).upper() else ("Encerrado" if "ENCERRADO" in str(r).upper() else str(r)))),
-                    "TECNICO": s_tecnico, "OBS": s_obs
+                    "TECNICO": s_tecnico,
+                    "OBS": s_obs
                 })
 
                 quad_map = get_quadrantes_map()
@@ -472,39 +480,51 @@ elif menu == "📥 Upload & Processamento":
                 )
                 df_fmt["TEMPO_DO_CHAMADO"] = df_fmt.apply(calculate_tempo_chamado, axis=1)
 
-                # PROCV DUPLO
-                smart_ne_set = set(); smart_eve_set = set()
-                df_fmmt_cloud = load_table("backlog_fmmt")
-                if not df_fmmt_cloud.empty:
-                    df_fmmt_cloud.columns = [str(c).upper().strip() for c in df_fmmt_cloud.columns]
-                    col_smart_ne = next((c for c in df_fmmt_cloud.columns if any(k in c for k in ["NE ID", "NENAME", "DESCRICAO", "ELEMENTO"])), None)
-                    if col_smart_ne: smart_ne_set.update(df_fmmt_cloud[col_smart_ne].dropna().astype(str).str.strip().str.upper())
-                    col_smart_eve = next((c for c in df_fmmt_cloud.columns if any(k in c for k in ["EVENTO", "ICTTTID", "INCIDENTE"])), None)
-                    if col_smart_eve: smart_eve_set.update(df_fmmt_cloud[col_smart_eve].dropna().astype(str).str.strip().str.upper())
+                # ==========================================================
+                # DUPLO PROCV EXATO: NENAME + EVENTO (ictTTid)
+                # ==========================================================
+                grafana_pairs = set()
 
                 df_graf_cloud = load_table("backlog_grafana")
                 if not df_graf_cloud.empty:
                     df_graf_cloud.columns = [str(c).upper().strip() for c in df_graf_cloud.columns]
-                    col_graf_ne = next((c for c in df_graf_cloud.columns if any(k in c for k in ["NE ID", "NENAME", "ELEMENTO"])), None)
-                    if col_graf_ne: smart_ne_set.update(df_graf_cloud[col_graf_ne].dropna().astype(str).str.strip().str.upper())
+                    col_graf_ne = next((c for c in df_graf_cloud.columns if any(k in c for k in ["NENAME", "NE ID", "ELEMENTO"])), None)
                     col_graf_eve = next((c for c in df_graf_cloud.columns if any(k in c for k in ["ICTTTID", "EVENTO"])), None)
-                    if col_graf_eve: smart_eve_set.update(df_graf_cloud[col_graf_eve].dropna().astype(str).str.strip().str.upper())
+                    
+                    if col_graf_ne and col_graf_eve:
+                        for _, r in df_graf_cloud.iterrows():
+                            ne = str(r[col_graf_ne]).strip().upper()
+                            eve = str(r[col_graf_eve]).strip().upper()
+                            if ne not in ["NAN", "NONE", "NULL", "", "-"] and eve not in ["NAN", "NONE", "NULL", "", "-"]:
+                                grafana_pairs.add((ne, eve))
+                                
+                df_fmmt_cloud = load_table("backlog_fmmt")
+                if not df_fmmt_cloud.empty:
+                    df_fmmt_cloud.columns = [str(c).upper().strip() for c in df_fmmt_cloud.columns]
+                    col_smart_ne = next((c for c in df_fmmt_cloud.columns if any(k in c for k in ["NE ID", "NENAME", "DESCRICAO"])), None)
+                    col_smart_eve = next((c for c in df_fmmt_cloud.columns if any(k in c for k in ["EVENTO", "ICTTTID", "INCIDENTE"])), None)
+                    
+                    if col_smart_ne and col_smart_eve:
+                        for _, r in df_fmmt_cloud.iterrows():
+                            ne = str(r[col_smart_ne]).strip().upper()
+                            eve = str(r[col_smart_eve]).strip().upper()
+                            if ne not in ["NAN", "NONE", "NULL", "", "-"] and eve not in ["NAN", "NONE", "NULL", "", "-"]:
+                                grafana_pairs.add((ne, eve))
 
-                for s in [smart_ne_set, smart_eve_set]:
-                    s.discard(""); s.discard("NAN"); s.discard("NONE"); s.discard("NULL"); s.discard("-")
-
-                def check_anel_duplo_procv(row):
-                    if not smart_ne_set and not smart_eve_set: return "NÃO"
+                def check_anel_preciso(row):
+                    if not grafana_pairs:
+                        return "NÃO"
+                    
                     ne = str(row.get("NE_ID", "")).strip().upper()
                     eve = str(row.get("EVENTO", "")).strip().upper()
-                    if eve and eve not in ["NAN", "NONE", "NULL", "-", ""]:
-                        if eve in smart_eve_set: return "SIM"
-                    if ne and ne not in ["NAN", "NONE", "NULL", "-", ""]:
-                        if ne in smart_ne_set: return "SIM"
+                    
+                    if (ne, eve) in grafana_pairs:
+                        return "SIM"
                     return "NÃO"
 
-                df_fmt["ANEL_ABERTO"] = df_fmt.apply(check_anel_duplo_procv, axis=1)
+                df_fmt["ANEL_ABERTO"] = df_fmt.apply(check_anel_preciso, axis=1)
 
+                # Processamento do Histórico CRC
                 df_crc_db = get_crc_data()
                 crc_tsks = set(df_crc_db["tsk"].dropna().astype(str).str.strip().str.upper()) if not df_crc_db.empty else set()
                 df_fmt["IS_CRC"] = df_fmt["TSK"].astype(str).str.strip().str.upper().apply(lambda x: "SIM" if x in crc_tsks else "NÃO")
@@ -517,7 +537,10 @@ elif menu == "📥 Upload & Processamento":
                 except: pass
                 
                 df_fmt.to_sql('backlog_fixa', engine, if_exists='replace', index=False)
+                aneis_count = (df_fmt["ANEL_ABERTO"] == "SIM").sum()
+                st.success(f"✅ Base Fixa Enviada para a Nuvem: {len(df_fmt)} registros. Cruzamento exato (NE+EVENTO) identificou: {aneis_count} anéis.")
 
+                # 2. BASE B2B
                 if f_b2b:
                     df_b2b_raw = load_file(f_b2b, ["B2B", "CORPORATIVO"])
                     s_b2b_tsk = get_single_series(df_b2b_raw, ["NÚMERO", "NUMERO", "TSK", "CHAMADO", "ORDEM"], "")
@@ -544,6 +567,7 @@ elif menu == "📥 Upload & Processamento":
                     df_fmt_atual["IS_B2B"] = df_fmt_atual.apply(lambda r: "SIM" if str(r["TSK"]).upper() in b2b_tokens or str(r["NE_ID"]).upper() in b2b_tokens else "NÃO", axis=1)
                     df_fmt_atual.to_sql('backlog_fixa', engine, if_exists='replace', index=False)
 
+                # 3. BASE MÓVEL BACKLOG
                 if f_movel_backlog:
                     df_movel_raw = load_file(f_movel_backlog, ["MOVEL", "MOBILE", "BACKLOG"])
                     s_tsk_m = get_single_series(df_movel_raw, ["NÚMERO", "NUMERO", "TSK", "CHAMADO", "ORDEM"], "")
@@ -565,8 +589,8 @@ elif menu == "📥 Upload & Processamento":
                     df_movel["TEMPO_DO_CHAMADO"] = df_movel.apply(calculate_tempo_chamado, axis=1)
                     df_movel.to_sql('backlog_movel', engine, if_exists='replace', index=False)
 
-                st.cache_data.clear() # ATUALIZA O CACHE GERAL DEPOIS DO UPLOAD
-                st.success("✅ Todas as bases selecionadas foram processadas e enviadas para a Nuvem com sucesso!")
+                st.cache_data.clear() # Limpa o cache após os uploads para refletir na tela
+                st.success("✅ Todas as bases selecionadas foram processadas com precisão e enviadas para a Nuvem!")
                 st.rerun()
 
 # ==========================================
@@ -588,7 +612,7 @@ elif menu == "📂 Backlog Operacional (Fixa)":
         for c in ["DWDM", "ANEL_ABERTO", "IS_B2B", "IS_CRC", "QUADRANTE"]:
             if c not in df.columns: df[c] = "NÃO"
 
-        cols_backlog = ["TSK", "END_ID", "NE_ID", "TEMPO_DO_CHAMADO", "AGING", "FALHA", "STATUS", "OBS", "RESUMO", "TECNICO", "DWDM", "ANEL_ABERTO", "IS_CRC", "QUADRANTE"]
+        cols_backlog = ["TSK", "EVENTO", "END_ID", "NE_ID", "TEMPO_DO_CHAMADO", "AGING", "FALHA", "STATUS", "OBS", "RESUMO", "TECNICO", "DWDM", "ANEL_ABERTO", "IS_CRC", "QUADRANTE"]
         for c in cols_backlog:
             if c not in df.columns: df[c] = ""
 
@@ -612,6 +636,7 @@ elif menu == "📂 Backlog Operacional (Fixa)":
 
         column_config = {
             "TSK": st.column_config.TextColumn("TSK", disabled=True),
+            "EVENTO": st.column_config.TextColumn("Evento", disabled=True),
             "END_ID": st.column_config.TextColumn("END ID", disabled=True),
             "NE_ID": st.column_config.TextColumn("NE ID", disabled=True),
             "TEMPO_DO_CHAMADO": st.column_config.TextColumn("DOWNTIME", disabled=True),
@@ -646,7 +671,7 @@ elif menu == "📂 Backlog Operacional (Fixa)":
                                 WHERE "TSK" = :tsk
                             """), {"st": row["STATUS"], "res": row["RESUMO"], "tec": row["TECNICO"], "obs": row["OBS"], "tsk": row["TSK"]})
                     conn.commit()
-                st.cache_data.clear() # Limpa o cache após editar
+                st.cache_data.clear()
                 st.success(f"✅ Atualização enviada para a Nuvem por {st.session_state['username']}!")
                 st.rerun()
 
@@ -730,7 +755,7 @@ elif menu == "📱 Backlog Móvel":
                                 WHERE "TSK" = :tsk
                             """), {"st": row["STATUS"], "res": row["RESUMO"], "tec": row["TECNICO"], "obs": row["OBS"], "tsk": row["TSK"]})
                     conn.commit()
-                st.cache_data.clear() # Limpa o cache após editar
+                st.cache_data.clear()
                 st.success(f"✅ Atualização enviada para a Nuvem por {st.session_state['username']}!")
                 st.rerun()
 
@@ -863,7 +888,7 @@ elif menu == "💼 Gestão B2B":
                                 WHERE "TSK" = :tsk
                             """), {"st": row["STATUS"], "res": row["RESUMO"], "tec": row["TECNICO"], "obs": row["OBS"], "tsk": row["TSK"]})
                     conn.commit()
-                st.cache_data.clear() # Limpa cache após editar
+                st.cache_data.clear()
                 st.success(f"✅ Atualização enviada para a Nuvem por {st.session_state['username']}!")
                 st.rerun()
 
