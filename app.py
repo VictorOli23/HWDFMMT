@@ -18,15 +18,6 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# CSS para a Animação do Vermelho Piscando (Blinker)
-st.markdown("""
-    <style>
-    @keyframes blinker {
-        50% { opacity: 0.3; }
-    }
-    </style>
-""", unsafe_allow_html=True)
-
 if 'logged_in' not in st.session_state:
     st.session_state['logged_in'] = False
 if 'username' not in st.session_state:
@@ -162,7 +153,7 @@ def verify_login(username, password):
     return False, False
 
 def apply_colors(df):
-    """Aplica o motor de cores estritamente na coluna AGING, removendo a formatação de Status."""
+    """Aplica o motor de cores estritamente na coluna de tempo real (TEMPO_DO_CHAMADO e AGING)."""
     def style_aging(val):
         s = str(val).strip().lower()
         if not s or s in ['nan', 'none', '-']: return ''
@@ -176,22 +167,28 @@ def apply_colors(df):
             if m2:
                 days = float(m2.group(1).replace(',', '.'))
         
-        # Escala de cores do Aging baseada na regra SLA
+        # Escala de cores do Aging baseada na regra SLA do NOC
         if days >= 10:
-            return 'background-color: #DC2626; color: white; font-weight: bold; animation: blinker 1.2s linear infinite;'
+            # Maior de 10 dias (Vermelho Escuro Alerta Máximo para compensar falta de animação no Grid)
+            return 'background-color: #8B0000; color: white; font-weight: bold;'
         elif days >= 5:
-            return 'background-color: #EF4444; color: white; font-weight: bold;'
+            # 5 a 10 dias (Vermelho Padrão)
+            return 'background-color: #DC2626; color: white; font-weight: bold;'
         elif days >= 4:
+            # Superior a 3 dias (Considerado a partir de 4 como Laranja)
             return 'background-color: #F97316; color: white; font-weight: bold;'
         elif days >= 3:
+            # 3 a 5 dias (Azul Escuro)
             return 'background-color: #1E3A8A; color: white; font-weight: bold;'
         elif days >= 1:
+            # 1 a 3 dias (Azul Claro)
             return 'background-color: #BAE6FD; color: #0369A1; font-weight: bold;'
         return ''
 
     try:
         styler = df.style
-        for col in ['AGING', 'aging']:
+        # Aplicando tanto no 'AGING' genérico quanto no 'TEMPO_DO_CHAMADO' que é a coluna mostrada
+        for col in ['AGING', 'aging', 'TEMPO_DO_CHAMADO']:
             if col in df.columns:
                 styler = styler.map(style_aging, subset=[col]) if hasattr(styler, 'map') else styler.applymap(style_aging, subset=[col])
         return styler
@@ -495,6 +492,7 @@ elif menu == "📥 Upload & Processamento":
             with st.spinner("Realizando a Fusão das bases, preservando edições e cruzando Anéis..."):
                 st.cache_data.clear() 
                 
+                # PRESERVAR BASES ANTIGAS
                 df_old_fixa = load_table("backlog_fixa")
                 df_old_movel = load_table("backlog_movel")
                 df_old_b2b = load_table("backlog_b2b")
@@ -525,6 +523,9 @@ elif menu == "📥 Upload & Processamento":
                     df_crc_raw = load_file(f_crc, ["CRC"])
                     if not df_crc_raw.empty: upsert_crc(df_crc_raw)
 
+                # ==========================================================
+                # FUSÃO: PUXA OS CHAMADOS FALTANTES DA FMMT PARA A FIXA
+                # ==========================================================
                 quad_map = get_quadrantes_map()
                 
                 df_fmt_base = pd.DataFrame(extrair_colunas(df_fmt_raw))
@@ -550,6 +551,7 @@ elif menu == "📥 Upload & Processamento":
                 df_fmt["QUADRANTE"] = df_fmt["QUADRANTE"].fillna(df_fmt["END_ID"].astype(str).apply(lambda x: re.search(r'(QD\s*\d+|ANF\s*\d+)', str(x), re.IGNORECASE).group(0).upper() if re.search(r'(QD\s*\d+|ANF\s*\d+)', str(x), re.IGNORECASE) else "NÃO INFORMADO"))
                 df_fmt["TEMPO_DO_CHAMADO"] = df_fmt.apply(calculate_tempo_chamado, axis=1)
 
+                # ROTINA DE RETENÇÃO DE DADOS (FIXA)
                 if not df_old_fixa.empty:
                     dict_st = dict(zip(df_old_fixa["TSK"], df_old_fixa["STATUS"]))
                     dict_res = dict(zip(df_old_fixa["TSK"], df_old_fixa["RESUMO"]))
@@ -560,6 +562,9 @@ elif menu == "📥 Upload & Processamento":
                     df_fmt["TECNICO"] = df_fmt.apply(lambda r: dict_tec.get(r["TSK"], r["TECNICO"]), axis=1)
                     df_fmt["OBS"] = df_fmt.apply(lambda r: dict_obs.get(r["TSK"], r["OBS"]), axis=1)
 
+                # ==========================================================
+                # OMNI-SEARCH EXCLUSIVO CONTRA GRAFANA
+                # ==========================================================
                 global_names = set()
                 global_events = set()
                 
@@ -590,6 +595,7 @@ elif menu == "📥 Upload & Processamento":
                 crc_tsks = set(df_crc_db["tsk"].dropna().astype(str).str.strip().str.upper()) if not df_crc_db.empty else set()
                 df_fmt["IS_CRC"] = df_fmt["TSK"].astype(str).str.strip().str.upper().apply(lambda x: "SIM" if x in crc_tsks else "NÃO")
 
+                # B2B Processado em Memória e com Retenção
                 df_fmt["IS_B2B"] = "NÃO" 
                 if f_b2b:
                     df_b2b_raw = load_file(f_b2b, ["B2B", "CORPORATIVO"])
@@ -952,7 +958,7 @@ elif menu == "🔄 Handover (Entrantes/Saintes)":
         with t2:
             st.subheader(f"🔴 Chamados Saintes ({len(df_saintes)})")
             if not df_saintes.empty:
-                cols_show = ["TSK", "END_ID", "NE_ID", "QUADRANTE", "FALHA", "STATUS", "TECNICO", "OBS", "AGING"]
+                cols_show = ["TSK", "END_ID", "NE_ID", "QUADRANTE", "FALHA", "STATUS", "TECNICO", "OBS"]
                 cols_show = [c for c in cols_show if c in df_saintes.columns]
                 st.dataframe(apply_colors(df_saintes[cols_show]), use_container_width=True)
             else:
@@ -1148,7 +1154,6 @@ elif menu == "📺 Apresentação Executiva":
                 st.markdown(f"<h3 style='color: {color_theme};'>{emoji} {title}</h3>", unsafe_allow_html=True)
                 stats = get_status_counts(sub_df, status_col="STATUS")
                 
-                # LINHA DE MÉTRICAS
                 if extra_metrics is not None:
                     cm1, cm2, cm3 = st.columns(3)
                     cm1.metric("🌅 Começou no Dia", extra_metrics.get("iniciou_dia", 0))
@@ -1159,7 +1164,6 @@ elif menu == "📺 Apresentação Executiva":
                     
                 st.write("---")
 
-                # LATERAL: STATUS (TEXTO) | GRÁFICO STATUS | GRÁFICO QUADRANTE
                 c_metrics, c_chart1, c_chart2 = st.columns([1.2, 1.5, 1.5])
                 
                 with c_metrics:
@@ -1200,9 +1204,9 @@ elif menu == "📺 Apresentação Executiva":
                         st.caption("Sem dados.")
 
                 st.write("---")
-                # FILTRO INTERATIVO PARA A TABELA (SUBSTITUI O CLIQUE NO GRÁFICO NATIVAMENTE)
-                st.markdown("**🔍 Detalhamento (Selecione o Status para filtrar a tabela abaixo):**")
-                sel_tab = st.radio("Filtro de Status:", ["Todos", "Acionado", "Iniciado", "Tramitado", "Encerrado"], horizontal=True, label_visibility="collapsed", key=f"rad_{title}")
+                # BOTOES DE FILTRO INTERATIVO PARA A TABELA (EFEITO DASHBOARD)
+                st.markdown(f"**🔍 Detalhamento (Selecione o Status para filtrar):**")
+                sel_tab = st.radio("Filtro:", ["Todos", "Acionado", "Iniciado", "Tramitado", "Encerrado"], horizontal=True, label_visibility="collapsed", key=f"rad_{title}")
                 
                 df_show = sub_df.copy()
                 if sel_tab != "Todos":
