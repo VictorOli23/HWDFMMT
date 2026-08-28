@@ -90,7 +90,6 @@ def run_daily_snapshot():
             return
         
         if last_date != today_str:
-            # Virou o dia! Salva a foto do dia anterior no Histórico de Dias
             try:
                 df_fixa = pd.read_sql_table('backlog_fixa', conn)
                 if not df_fixa.empty:
@@ -99,7 +98,6 @@ def run_daily_snapshot():
             except:
                 pass
             
-            # Zera as tabelas operacionais do dia
             tables_to_clear = ['backlog_fixa', 'backlog_fmmt', 'backlog_movel', 'backlog_b2b', 'backlog_grafana', 'backlog_fixa_previous']
             for t in tables_to_clear:
                 conn.execute(text(f"DROP TABLE IF EXISTS {t}"))
@@ -1101,6 +1099,18 @@ elif menu == "📺 Apresentação Executiva":
         df_view = df if selected_aging == "Todos" else df[df["AGING"].astype(str) == selected_aging]
         st.write("")
 
+        st.markdown("### 📍 Visão Geográfica Global (Top 10 Quadrantes Impactados)")
+        if "QUADRANTE" in df_view.columns and not df_view.empty:
+            quad_counts = df_view[df_view["QUADRANTE"] != "NÃO INFORMADO"]["QUADRANTE"].value_counts().head(10)
+            if not quad_counts.empty:
+                st.bar_chart(quad_counts, color="#F59E0B", horizontal=True)
+            else:
+                st.info("Nenhum quadrante mapeado para os chamados nesta faixa de Aging.")
+        else:
+            st.info("Dados de quadrante indisponíveis para este filtro.")
+            
+        st.divider()
+
         def render_presentation_card(title, emoji, sub_df, color_theme, extra_metrics=None):
             with st.container(border=True):
                 st.markdown(f"<h3 style='color: {color_theme};'>{emoji} {title}</h3>", unsafe_allow_html=True)
@@ -1133,18 +1143,18 @@ elif menu == "📺 Apresentação Executiva":
                         "Status": ["Acionados", "Iniciados", "Tram.", "Encerr."],
                         "Qtde": [stats["Acionado"], stats["Iniciado"], stats["Tramitado"], stats["Encerrado"]]
                     }).set_index("Status")
-                    st.bar_chart(status_df, height=180, color=color_theme, use_container_width=True)
+                    st.bar_chart(status_df, height=180, color=color_theme, use_container_width=True, horizontal=True)
                     
                 with c_chart2:
                     st.markdown("**Top 5 Quadrantes:**")
                     if "QUADRANTE" in sub_df.columns:
                         quad_counts_card = sub_df[sub_df["QUADRANTE"] != "NÃO INFORMADO"]["QUADRANTE"].value_counts().head(5)
                         if not quad_counts_card.empty:
-                            st.bar_chart(quad_counts_card, height=180, color="#F59E0B", use_container_width=True)
+                            st.bar_chart(quad_counts_card, height=180, color="#F59E0B", use_container_width=True, horizontal=True)
                         else:
-                            st.caption("Sem dados de quadrante.")
+                            st.caption("Sem dados.")
                     else:
-                        st.caption("Sem dados de quadrante.")
+                        st.caption("Sem dados.")
 
                 # TABS INTERATIVAS (FILTRO DIRETO NO CARD)
                 st.markdown("**🔍 Detalhamento por Status (Clique nas Abas Abaixo):**")
