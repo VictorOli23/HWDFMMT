@@ -347,6 +347,7 @@ abas_disponiveis = [
     "🔄 Handover (Entrantes/Saintes)",
     "💼 Gestão B2B",
     "📺 Apresentação Executiva",
+    "🚨 Casos Críticos",
     "📋 Base Geral FMT",
     "🗄️ Histórico CRC",
     "📅 Histórico Diário (Dias)"
@@ -1103,6 +1104,65 @@ elif menu == "📺 Apresentação Executiva":
         # 4. CRC
         df_crc_view = df_view[df_view["IS_CRC"] == "SIM"]
         render_presentation_card("Casos com Histórico CRC", "🟢", df_crc_view, "#16A34A")
+
+# ==========================================
+# ABA NOVO: CASOS CRÍTICOS (MANUAL)
+# ==========================================
+elif menu == "🚨 Casos Críticos":
+    st.title("🚨 Gestão de Casos Críticos")
+    st.markdown("Insira e atualize os casos críticos manualmente. Use o gerador abaixo para copiar o relatório e enviar por e-mail.")
+
+    df_crit = load_table("casos_criticos")
+    cols_crit = ["TIPO", "Numero Chamado", "NE-ID", "END-ID", "QDR", "Status atual", "Descrição", "Previsão", "Nivel Escalonado"]
+    
+    if df_crit.empty:
+        df_crit = pd.DataFrame(columns=cols_crit)
+    else:
+        for c in cols_crit:
+            if c not in df_crit.columns:
+                df_crit[c] = ""
+
+    df_crit = df_crit[cols_crit]
+
+    config = {
+        "TIPO": st.column_config.SelectboxColumn("TIPO", options=["Ultrafibra", "100G", "400G", "Massiva"]),
+        "Descrição": st.column_config.TextColumn("Descrição", width="large"),
+    }
+
+    edited_crit = st.data_editor(df_crit, num_rows="dynamic", column_config=config, use_container_width=True)
+
+    if st.button("💾 Salvar Casos Críticos", type="primary"):
+        edited_crit.to_sql("casos_criticos", engine, if_exists="replace", index=False)
+        st.success("Tabela de casos críticos salva com sucesso!")
+        st.rerun()
+
+    st.divider()
+    st.subheader("✉️ Gerador de Relatório para E-mail (Print)")
+    
+    sel_tipo = st.selectbox("Filtrar TIPO para o E-mail:", ["Todos", "Ultrafibra", "100G", "400G", "Massiva"])
+    
+    df_mail = edited_crit.copy()
+    if sel_tipo != "Todos":
+        df_mail = df_mail[df_mail["TIPO"] == sel_tipo]
+
+    if not df_mail.empty:
+        # Gera Tabela HTML para E-mail com CSS Inline forte
+        html_table = df_mail.to_html(index=False)
+        html_table = html_table.replace('<table border="1" class="dataframe">', '<table style="width:100%; border-collapse: collapse; font-family: Arial, sans-serif; font-size: 13px; color: #000; border: 1px solid #ccc;">')
+        html_table = html_table.replace('<th>', '<th style="background-color: #B91C1C; color: white; padding: 8px; border: 1px solid #ddd; text-align: center; font-weight: bold;">')
+        html_table = html_table.replace('<td>', '<td style="padding: 8px; border: 1px solid #ddd; text-align: center;">')
+        
+        styled_html = f"""
+        <div style="font-family: Arial, sans-serif; margin-bottom: 10px;">
+            <h4 style="color: #B91C1C; margin-bottom: 5px;">Relatório de Casos Críticos {f'- {sel_tipo}' if sel_tipo != 'Todos' else ''}</h4>
+            {html_table}
+        </div>
+        """
+        
+        st.info("💡 **Dica:** Selecione a tabela abaixo inteira com o mouse, aperte `Ctrl+C` e cole diretamente no corpo do Outlook com `Ctrl+V`. A formatação será mantida!")
+        st.markdown(styled_html, unsafe_allow_html=True)
+    else:
+        st.warning("Não há dados cadastrados para gerar o e-mail com este filtro.")
 
 # ==========================================
 # ABA 10: BASE GERAL FMT
