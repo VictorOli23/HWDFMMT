@@ -90,6 +90,7 @@ def run_daily_snapshot():
             return
         
         if last_date != today_str:
+            # Virou o dia! Salva a foto do dia anterior no Histórico de Dias
             try:
                 df_fixa = pd.read_sql_table('backlog_fixa', conn)
                 if not df_fixa.empty:
@@ -98,6 +99,7 @@ def run_daily_snapshot():
             except:
                 pass
             
+            # Zera as tabelas operacionais do dia
             tables_to_clear = ['backlog_fixa', 'backlog_fmmt', 'backlog_movel', 'backlog_b2b', 'backlog_grafana', 'backlog_fixa_previous']
             for t in tables_to_clear:
                 conn.execute(text(f"DROP TABLE IF EXISTS {t}"))
@@ -378,9 +380,7 @@ if menu == "👤 Gestão de Usuários (Admin)":
     st.markdown("### 📋 Usuários Cadastrados")
     try:
         with engine.connect() as conn:
-            # Seleciona sem alias para evitar problemas de case/acentuação no PostgreSQL
             df_users = pd.read_sql_query("SELECT username, nome_completo, cargo FROM usuarios_equipe", conn)
-            # Renomeia via Pandas (100% seguro)
             df_users.rename(columns={'username': 'Usuário', 'nome_completo': 'Nome', 'cargo': 'Cargo'}, inplace=True)
     except:
         df_users = pd.DataFrame()
@@ -461,6 +461,13 @@ elif menu == "📥 Upload & Processamento":
                 df_old_fixa = load_table("backlog_fixa")
                 df_old_movel = load_table("backlog_movel")
                 df_old_b2b = load_table("backlog_b2b")
+                
+                # CÓPIA SEGURA DA BASE ANTIGA PARA O HANDOVER
+                if not df_old_fixa.empty:
+                    try:
+                        df_old_fixa.to_sql('backlog_fixa_previous', engine, if_exists='replace', index=False)
+                    except:
+                        pass
                 
                 # UPLOADS BÁSICOS
                 df_fmt_raw = load_file(f_fmt, ["BACKLOG", "FMT", "TASK", "EVENTO"])
@@ -601,13 +608,6 @@ elif menu == "📥 Upload & Processamento":
                         b2b_tokens = set(df_b2b_cloud["TSK"].dropna().astype(str).str.strip().str.upper()).union(set(df_b2b_cloud["NE_ID"].dropna().astype(str).str.strip().str.upper()))
                         df_fmt["IS_B2B"] = df_fmt.apply(lambda r: "SIM" if str(r["TSK"]).upper() in b2b_tokens or str(r["NE_ID"]).upper() in b2b_tokens else "NÃO", axis=1)
 
-                try:
-                    with engine.connect() as conn:
-                        conn.execute(text("DROP TABLE IF EXISTS backlog_fixa_previous"))
-                        if not df_old_fixa.empty:
-                            df_old_fixa.to_sql('backlog_fixa_previous', engine, if_exists='replace', index=False)
-                except: pass
-                
                 df_fmt.to_sql('backlog_fixa', engine, if_exists='replace', index=False)
                 aneis_count = (df_fmt["ANEL_ABERTO"] == "SIM").sum()
                 
@@ -1099,18 +1099,6 @@ elif menu == "📺 Apresentação Executiva":
         df_view = df if selected_aging == "Todos" else df[df["AGING"].astype(str) == selected_aging]
         st.write("")
 
-        st.markdown("### 📍 Visão Geográfica Global (Top 10 Quadrantes Impactados)")
-        if "QUADRANTE" in df_view.columns and not df_view.empty:
-            quad_counts = df_view[df_view["QUADRANTE"] != "NÃO INFORMADO"]["QUADRANTE"].value_counts().head(10)
-            if not quad_counts.empty:
-                st.bar_chart(quad_counts, color="#F59E0B", horizontal=True)
-            else:
-                st.info("Nenhum quadrante mapeado para os chamados nesta faixa de Aging.")
-        else:
-            st.info("Dados de quadrante indisponíveis para este filtro.")
-            
-        st.divider()
-
         def render_presentation_card(title, emoji, sub_df, color_theme, extra_metrics=None):
             with st.container(border=True):
                 st.markdown(f"<h3 style='color: {color_theme};'>{emoji} {title}</h3>", unsafe_allow_html=True)
@@ -1152,9 +1140,9 @@ elif menu == "📺 Apresentação Executiva":
                         if not quad_counts_card.empty:
                             st.bar_chart(quad_counts_card, height=180, color="#F59E0B", use_container_width=True, horizontal=True)
                         else:
-                            st.caption("Sem dados.")
+                            st.caption("Sem dados de quadrante.")
                     else:
-                        st.caption("Sem dados.")
+                        st.caption("Sem dados de quadrante.")
 
                 # TABS INTERATIVAS (FILTRO DIRETO NO CARD)
                 st.markdown("**🔍 Detalhamento por Status (Clique nas Abas Abaixo):**")
