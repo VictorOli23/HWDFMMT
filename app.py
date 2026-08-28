@@ -329,6 +329,32 @@ def calculate_tempo_chamado(row):
     ag_val = str(row.get("AGING", "")).strip()
     return ag_val if ag_val and ag_val not in ["nan", "None"] else "0d 00h"
 
+def color_status_col(df, col_name="STATUS"):
+    """Aplica cores na coluna de Status de qualquer tabela gerada pelo Pandas no Streamlit."""
+    def style_status(val):
+        v = str(val).strip().upper()
+        if v == 'ACIONADO': 
+            return 'background-color: #F8D7DA; color: #842029; font-weight: bold;'
+        elif v == 'INICIADO': 
+            return 'background-color: #D1E7DD; color: #065F46; font-weight: bold;'
+        elif v == 'TRAMITADO': 
+            return 'background-color: #CFE2FF; color: #084298; font-weight: bold;'
+        elif v == 'ENCERRADO': 
+            return 'background-color: #E2E3E5; color: #41464B; font-weight: bold;'
+        elif v in ['NÃO ACIONADO', 'NAO ACIONADO']: 
+            return 'background-color: #FFF3CD; color: #664D03; font-weight: bold;'
+        return ''
+        
+    if col_name in df.columns:
+        try:
+            if hasattr(df.style, 'map'):
+                return df.style.map(style_status, subset=[col_name])
+            else:
+                return df.style.applymap(style_status, subset=[col_name])
+        except:
+            return df
+    return df
+
 # ==========================================
 # 6. MENUS DA BARRA LATERAL
 # ==========================================
@@ -461,13 +487,6 @@ elif menu == "📥 Upload & Processamento":
                 df_old_fixa = load_table("backlog_fixa")
                 df_old_movel = load_table("backlog_movel")
                 df_old_b2b = load_table("backlog_b2b")
-                
-                # CÓPIA SEGURA DA BASE ANTIGA PARA O HANDOVER
-                if not df_old_fixa.empty:
-                    try:
-                        df_old_fixa.to_sql('backlog_fixa_previous', engine, if_exists='replace', index=False)
-                    except:
-                        pass
                 
                 # UPLOADS BÁSICOS
                 df_fmt_raw = load_file(f_fmt, ["BACKLOG", "FMT", "TASK", "EVENTO"])
@@ -608,6 +627,13 @@ elif menu == "📥 Upload & Processamento":
                         b2b_tokens = set(df_b2b_cloud["TSK"].dropna().astype(str).str.strip().str.upper()).union(set(df_b2b_cloud["NE_ID"].dropna().astype(str).str.strip().str.upper()))
                         df_fmt["IS_B2B"] = df_fmt.apply(lambda r: "SIM" if str(r["TSK"]).upper() in b2b_tokens or str(r["NE_ID"]).upper() in b2b_tokens else "NÃO", axis=1)
 
+                try:
+                    with engine.connect() as conn:
+                        conn.execute(text("DROP TABLE IF EXISTS backlog_fixa_previous"))
+                        if not df_old_fixa.empty:
+                            df_old_fixa.to_sql('backlog_fixa_previous', engine, if_exists='replace', index=False)
+                except: pass
+                
                 df_fmt.to_sql('backlog_fixa', engine, if_exists='replace', index=False)
                 aneis_count = (df_fmt["ANEL_ABERTO"] == "SIM").sum()
                 
@@ -732,7 +758,7 @@ elif menu == "📂 Backlog Operacional (Fixa)":
             "ORIGEM": st.column_config.TextColumn("Origem", disabled=True),
         }
 
-        edited_bk = st.data_editor(df_bk_view[cols_backlog], column_config=column_config, use_container_width=True, height=560, key="backlog_editor_unique")
+        edited_bk = st.data_editor(color_status_col(df_bk_view[cols_backlog], "STATUS"), column_config=column_config, use_container_width=True, height=560, key="backlog_editor_unique")
 
         col_b1, col_b2 = st.columns([1, 4])
         with col_b1:
@@ -830,7 +856,7 @@ elif menu == "📱 Backlog Móvel":
             "OBS": st.column_config.TextColumn("Observações / Trâmites", width="large"),
         }
 
-        edited_movel = st.data_editor(df_movel_view[cols_movel], column_config=column_config_movel, use_container_width=True, height=500, key="movel_editor_unique")
+        edited_movel = st.data_editor(color_status_col(df_movel_view[cols_movel], "STATUS"), column_config=column_config_movel, use_container_width=True, height=500, key="movel_editor_unique")
 
         col_save_m1, col_save_m2 = st.columns([1, 4])
         with col_save_m1:
@@ -920,7 +946,7 @@ elif menu == "🔄 Handover (Entrantes/Saintes)":
             if not df_entrantes.empty:
                 cols_show = ["TSK", "END_ID", "NE_ID", "QUADRANTE", "FALHA", "AGING", "STATUS"]
                 cols_show = [c for c in cols_show if c in df_entrantes.columns]
-                st.dataframe(df_entrantes[cols_show], use_container_width=True)
+                st.dataframe(color_status_col(df_entrantes[cols_show], "STATUS"), use_container_width=True)
             else:
                 st.success("Nenhum chamado novo entrou na base desde a última atualização.")
 
@@ -929,7 +955,7 @@ elif menu == "🔄 Handover (Entrantes/Saintes)":
             if not df_saintes.empty:
                 cols_show = ["TSK", "END_ID", "NE_ID", "QUADRANTE", "FALHA", "STATUS", "TECNICO", "OBS"]
                 cols_show = [c for c in cols_show if c in df_saintes.columns]
-                st.dataframe(df_saintes[cols_show], use_container_width=True)
+                st.dataframe(color_status_col(df_saintes[cols_show], "STATUS"), use_container_width=True)
             else:
                 st.info("Nenhum chamado saiu da base desde a última atualização.")
 
@@ -1021,7 +1047,7 @@ elif menu == "💼 Gestão B2B":
             "OBS": st.column_config.TextColumn("Observações / Trâmites", width="large"),
         }
 
-        edited_b2b = st.data_editor(df_b2b_view[cols_b2b], column_config=column_config_b2b, use_container_width=True, height=500, key="b2b_editor_unique")
+        edited_b2b = st.data_editor(color_status_col(df_b2b_view[cols_b2b], "STATUS"), column_config=column_config_b2b, use_container_width=True, height=500, key="b2b_editor_unique")
 
         col_save_b1, col_save_b2 = st.columns([1, 4])
         with col_save_b1:
@@ -1099,6 +1125,18 @@ elif menu == "📺 Apresentação Executiva":
         df_view = df if selected_aging == "Todos" else df[df["AGING"].astype(str) == selected_aging]
         st.write("")
 
+        st.markdown("### 📍 Visão Geográfica Global (Top 10 Quadrantes Impactados)")
+        if "QUADRANTE" in df_view.columns and not df_view.empty:
+            quad_counts = df_view[df_view["QUADRANTE"] != "NÃO INFORMADO"]["QUADRANTE"].value_counts().head(10)
+            if not quad_counts.empty:
+                st.bar_chart(quad_counts, color="#F59E0B", horizontal=True)
+            else:
+                st.info("Nenhum quadrante mapeado para os chamados nesta faixa de Aging.")
+        else:
+            st.info("Dados de quadrante indisponíveis para este filtro.")
+            
+        st.divider()
+
         def render_presentation_card(title, emoji, sub_df, color_theme, extra_metrics=None):
             with st.container(border=True):
                 st.markdown(f"<h3 style='color: {color_theme};'>{emoji} {title}</h3>", unsafe_allow_html=True)
@@ -1152,22 +1190,22 @@ elif menu == "📺 Apresentação Executiva":
                 
                 with t1:
                     df_acionado = sub_df[sub_df["STATUS"] == "Acionado"]
-                    if not df_acionado.empty: st.dataframe(df_acionado[cols_show], use_container_width=True, hide_index=True)
+                    if not df_acionado.empty: st.dataframe(color_status_col(df_acionado[cols_show], "STATUS"), use_container_width=True, hide_index=True)
                     else: st.caption("Nenhum chamado Acionado.")
                 with t2:
                     df_ini = sub_df[sub_df["STATUS"] == "Iniciado"]
-                    if not df_ini.empty: st.dataframe(df_ini[cols_show], use_container_width=True, hide_index=True)
+                    if not df_ini.empty: st.dataframe(color_status_col(df_ini[cols_show], "STATUS"), use_container_width=True, hide_index=True)
                     else: st.caption("Nenhum chamado Iniciado.")
                 with t3:
                     df_tram = sub_df[sub_df["STATUS"] == "Tramitado"]
-                    if not df_tram.empty: st.dataframe(df_tram[cols_show], use_container_width=True, hide_index=True)
+                    if not df_tram.empty: st.dataframe(color_status_col(df_tram[cols_show], "STATUS"), use_container_width=True, hide_index=True)
                     else: st.caption("Nenhum chamado Tramitado.")
                 with t4:
                     df_enc = sub_df[sub_df["STATUS"] == "Encerrado"]
-                    if not df_enc.empty: st.dataframe(df_enc[cols_show], use_container_width=True, hide_index=True)
+                    if not df_enc.empty: st.dataframe(color_status_col(df_enc[cols_show], "STATUS"), use_container_width=True, hide_index=True)
                     else: st.caption("Nenhum chamado Encerrado.")
                 with t5:
-                    if not sub_df.empty: st.dataframe(sub_df[cols_show], use_container_width=True, hide_index=True)
+                    if not sub_df.empty: st.dataframe(color_status_col(sub_df[cols_show], "STATUS"), use_container_width=True, hide_index=True)
                     else: st.caption("Nenhum chamado no total.")
 
             st.write("")
@@ -1253,7 +1291,7 @@ elif menu == "🚨 Casos Críticos":
         "Previsão e Nivel Escalonado": st.column_config.TextColumn("Previsão e Nivel Escalonado", width="large"),
     }
 
-    edited_crit = st.data_editor(df_crit, num_rows="dynamic", column_config=config, use_container_width=True)
+    edited_crit = st.data_editor(color_status_col(df_crit, "Status atual"), num_rows="dynamic", column_config=config, use_container_width=True)
 
     if st.button("💾 Salvar Casos Críticos", type="primary"):
         edited_crit.to_sql("casos_criticos", engine, if_exists="replace", index=False)
@@ -1319,7 +1357,7 @@ elif menu == "📋 Base Geral FMT":
         if busca:
             df_filtered = df_filtered[df_filtered.astype(str).apply(lambda row: row.str.contains(busca, case=False).any(), axis=1)]
 
-        st.dataframe(df_filtered, use_container_width=True, height=520)
+        st.dataframe(color_status_col(df_filtered, "STATUS"), use_container_width=True, height=520)
 
         csv = df_filtered.to_csv(index=False).encode("utf-8")
         st.download_button("📥 Baixar Base Filtrada (CSV)", data=csv, file_name="equipamentos_fmt_completo.csv", mime="text/csv")
@@ -1370,7 +1408,7 @@ elif menu == "🗄️ Histórico CRC":
         }
 
         edited_crc = st.data_editor(
-            df_crc_view[["tsk", "ne_id", "end_id", "status", "aging", "descricao", "data_atualizacao"]], 
+            color_status_col(df_crc_view[["tsk", "ne_id", "end_id", "status", "aging", "descricao", "data_atualizacao"]], "status"), 
             column_config=col_cfg_crc, 
             use_container_width=True, 
             height=500, 
@@ -1420,7 +1458,7 @@ elif menu == "📅 Histórico Diário (Dias)":
         
         df_view = df_hist[df_hist["data_snapshot"] == selected_dia]
         st.metric(f"Total de Registros do Plantão ({selected_dia})", len(df_view))
-        st.dataframe(df_view, use_container_width=True)
+        st.dataframe(color_status_col(df_view, "STATUS"), use_container_width=True)
         
         output = io.BytesIO()
         with pd.ExcelWriter(output, engine="openpyxl") as writer:
