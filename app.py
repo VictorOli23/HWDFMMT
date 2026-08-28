@@ -90,6 +90,7 @@ def run_daily_snapshot():
             return
         
         if last_date != today_str:
+            # Virou o dia! Salva a foto do dia anterior no Histórico de Dias
             try:
                 df_fixa = pd.read_sql_table('backlog_fixa', conn)
                 if not df_fixa.empty:
@@ -98,6 +99,7 @@ def run_daily_snapshot():
             except:
                 pass
             
+            # Zera as tabelas operacionais do dia
             tables_to_clear = ['backlog_fixa', 'backlog_fmmt', 'backlog_movel', 'backlog_b2b', 'backlog_grafana', 'backlog_fixa_previous']
             for t in tables_to_clear:
                 conn.execute(text(f"DROP TABLE IF EXISTS {t}"))
@@ -359,7 +361,8 @@ menu = st.sidebar.radio("Navegação", abas_disponiveis)
 # ==========================================
 if menu == "👤 Gestão de Usuários (Admin)":
     st.title("👤 Gerenciamento de Acessos")
-    with st.expander("➕ Cadastrar Novo Usuário", expanded=True):
+    
+    with st.expander("➕ Cadastrar Novo Usuário", expanded=False):
         with st.form("add_user_form"):
             new_user = st.text_input("Usuário (Ex: wesley.noc)")
             new_name = st.text_input("Nome Completo")
@@ -373,6 +376,28 @@ if menu == "👤 Gestão de Usuários (Admin)":
                         conn.commit()
                         st.success("Criado!")
                     except: st.error("Usuário já existe.")
+
+    st.markdown("### 📋 Usuários Cadastrados")
+    try:
+        with engine.connect() as conn:
+            df_users = pd.read_sql_query("SELECT username as Usuário, nome_completo as Nome, cargo as Cargo FROM usuarios_equipe", conn)
+    except:
+        df_users = pd.DataFrame()
+        
+    if not df_users.empty:
+        st.dataframe(df_users, use_container_width=True, hide_index=True)
+        
+        with st.expander("🗑️ Excluir Usuário", expanded=False):
+            st.warning("Cuidado: A exclusão é imediata e irreversível.")
+            user_to_delete = st.selectbox("Selecione o usuário que deseja remover:", options=df_users["Usuário"].tolist())
+            if st.button("🚨 Confirmar Exclusão", type="primary"):
+                with engine.connect() as conn:
+                    conn.execute(text("DELETE FROM usuarios_equipe WHERE username = :u"), {"u": user_to_delete})
+                    conn.commit()
+                st.success(f"Usuário '{user_to_delete}' excluído com sucesso!")
+                st.rerun()
+    else:
+        st.info("Nenhum usuário cadastrado no banco de dados.")
 
 # ==========================================
 # ABA: UPLOAD & PROCESSAMENTO
@@ -942,22 +967,24 @@ elif menu == "💼 Gestão B2B":
 
         df_b2b_view = df_b2b.loc[:, ~df_b2b.columns.duplicated()].copy()
 
-        c_b1, c_b2, c_b3, c_b4, c_b5 = st.columns([1, 1, 1.2, 1.2, 2])
+        c_b1, c_b2, c_b3, c_b4 = st.columns(4)
         with c_b1:
             sel_cat_b = st.selectbox("Categoria (Fila/Sainte):", ["Todas", "Fila (Pendentes)", "Saintes (Concluídos)"], key="b2b_cat")
         with c_b2:
             st_b2b_opts = ["Todos"] + sorted(list(df_b2b_view["STATUS"].dropna().unique()))
-            sel_b2b_st = st.selectbox("Filtrar Status:", options=st_b2b_opts, key="b2b_st")
+            sel_b2b_st = st.selectbox("Status Específico:", options=st_b2b_opts, key="b2b_st")
         with c_b3:
             quad_opts_b = ["Todos"] + sorted([str(x) for x in df_b2b_view["QUADRANTE"].dropna().unique()])
             sel_b2b_quad = st.selectbox("Filtrar Quadrante:", options=quad_opts_b, key="b2b_quad")
         with c_b4:
             sel_b2b_rede = st.selectbox("Rede:", options=["Todas", "Fixa", "Móvel"], key="b2b_rede")
+
+        c_b5, c_b6 = st.columns([1, 3])
         with c_b5:
             grupo_opts = ["Todos"] + sorted(list(df_b2b_view["GRUPO_ACIONADO"].dropna().unique()))
             sel_b2b_grupo = st.selectbox("Grupo Acionado:", options=grupo_opts, key="b2b_grupo")
-            
-        busca_b2b = st.text_input("🔍 Busca B2B (Número / TSK, NE ID, Falha, Técnico):", key="b2b_busca")
+        with c_b6:
+            busca_b2b = st.text_input("🔍 Busca B2B (Número / TSK, NE ID, Falha, Técnico):", key="b2b_busca")
 
         if sel_cat_b == "Fila (Pendentes)":
             df_b2b_view = df_b2b_view[df_b2b_view["STATUS"].isin(["Não Acionado", "Acionado", "Iniciado"])]
