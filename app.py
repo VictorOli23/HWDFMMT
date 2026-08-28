@@ -544,11 +544,12 @@ elif menu == "📥 Upload & Processamento":
                     s_b2b_tec = get_single_series(df_b2b_raw, ["NOME DO TÉCNICO", "NOME TÉCNICO CAMPO", "TÉCNICO", "TECNICO"], "")
                     s_b2b_res = get_single_series(df_b2b_raw, ["RESUMO", "OBSERVAÇÕES"], "")
                     s_b2b_obs = get_single_series(df_b2b_raw, ["OBS", "NOTAS"], "")
+                    s_b2b_grupo = get_single_series(df_b2b_raw, ["GRUPO ACIONADO", "GRUPO_ACIONADO", "GRUPO"], "NÃO INFORMADO")
                     
                     df_b2b_proc = pd.DataFrame({
                         "TSK": s_b2b_tsk, "END_ID": s_b2b_end, "NE_ID": s_b2b_ne, "FALHA": s_b2b_falha, "AGING": s_b2b_aging, "DATA_CRIACAO": s_b2b_cria,
                         "STATUS": s_b2b_status.apply(categorize_status), "RESUMO": s_b2b_res.apply(lambda r: "Em Campo" if "CAMPO" in str(r).upper() else ("Tramitado" if "TRAMITADO" in str(r).upper() else ("Encerrado" if "ENCERRADO" in str(r).upper() else str(r)))),
-                        "TECNICO": s_b2b_tec, "OBS": s_b2b_obs
+                        "TECNICO": s_b2b_tec, "OBS": s_b2b_obs, "GRUPO_ACIONADO": s_b2b_grupo
                     })
                     df_b2b_proc = df_b2b_proc.drop_duplicates(subset=["TSK"], keep='first')
                     df_b2b_proc["QUADRANTE"] = df_b2b_proc["END_ID"].astype(str).str.strip().str.upper().map(quad_map)
@@ -570,8 +571,9 @@ elif menu == "📥 Upload & Processamento":
                     b2b_tokens = set(df_b2b_proc["TSK"].dropna().astype(str).str.strip().str.upper()).union(set(df_b2b_proc["NE_ID"].dropna().astype(str).str.strip().str.upper()))
                     df_fmt["IS_B2B"] = df_fmt.apply(lambda r: "SIM" if str(r["TSK"]).upper() in b2b_tokens or str(r["NE_ID"]).upper() in b2b_tokens else "NÃO", axis=1)
                 else:
-                    if not df_old_b2b.empty:
-                        b2b_tokens = set(df_old_b2b["TSK"].dropna().astype(str).str.strip().str.upper()).union(set(df_old_b2b["NE_ID"].dropna().astype(str).str.strip().str.upper()))
+                    df_b2b_cloud = load_table("backlog_b2b")
+                    if not df_b2b_cloud.empty:
+                        b2b_tokens = set(df_b2b_cloud["TSK"].dropna().astype(str).str.strip().str.upper()).union(set(df_b2b_cloud["NE_ID"].dropna().astype(str).str.strip().str.upper()))
                         df_fmt["IS_B2B"] = df_fmt.apply(lambda r: "SIM" if str(r["TSK"]).upper() in b2b_tokens or str(r["NE_ID"]).upper() in b2b_tokens else "NÃO", axis=1)
 
                 try:
@@ -905,6 +907,7 @@ elif menu == "💼 Gestão B2B":
         st.warning("Nenhuma base B2B carregada na nuvem. Envie o arquivo B2B na primeira aba.")
     else:
         if "QUADRANTE" not in df_b2b.columns: df_b2b["QUADRANTE"] = "NÃO INFORMADO"
+        if "GRUPO_ACIONADO" not in df_b2b.columns: df_b2b["GRUPO_ACIONADO"] = "NÃO INFORMADO"
 
         stats_b2b = get_status_counts(df_b2b, status_col="STATUS")
         m1, m2, m3, m4, m5 = st.columns(5)
@@ -916,13 +919,13 @@ elif menu == "💼 Gestão B2B":
 
         st.divider()
 
-        cols_b2b = ["TSK", "TEMPO_DO_CHAMADO", "QUADRANTE", "NE_ID", "END_ID", "FALHA", "STATUS", "RESUMO", "TECNICO", "OBS"]
+        cols_b2b = ["TSK", "TEMPO_DO_CHAMADO", "QUADRANTE", "GRUPO_ACIONADO", "NE_ID", "END_ID", "FALHA", "STATUS", "RESUMO", "TECNICO", "OBS"]
         for c in cols_b2b:
             if c not in df_b2b.columns: df_b2b[c] = ""
 
         df_b2b_view = df_b2b.loc[:, ~df_b2b.columns.duplicated()].copy()
 
-        c_b1, c_b2, c_b3 = st.columns([1, 1, 2])
+        c_b1, c_b2, c_b3, c_b4 = st.columns([1, 1, 1.5, 2])
         with c_b1:
             st_b2b_opts = ["Todos"] + sorted(list(df_b2b_view["STATUS"].dropna().unique()))
             sel_b2b_st = st.selectbox("Filtrar Status:", options=st_b2b_opts, key="b2b_st")
@@ -930,16 +933,21 @@ elif menu == "💼 Gestão B2B":
             quad_opts_b = ["Todos"] + sorted([str(x) for x in df_b2b_view["QUADRANTE"].dropna().unique()])
             sel_b2b_quad = st.selectbox("Filtrar Quadrante:", options=quad_opts_b, key="b2b_quad")
         with c_b3:
+            grupo_opts = ["Todos"] + sorted(list(df_b2b_view["GRUPO_ACIONADO"].dropna().unique()))
+            sel_b2b_grupo = st.selectbox("Grupo Acionado:", options=grupo_opts, key="b2b_grupo")
+        with c_b4:
             busca_b2b = st.text_input("🔍 Busca B2B (Número / TSK, NE ID, Falha, Técnico):", key="b2b_busca")
 
         if sel_b2b_st != "Todos": df_b2b_view = df_b2b_view[df_b2b_view["STATUS"] == sel_b2b_st]
         if sel_b2b_quad != "Todos": df_b2b_view = df_b2b_view[df_b2b_view["QUADRANTE"] == sel_b2b_quad]
+        if sel_b2b_grupo != "Todos": df_b2b_view = df_b2b_view[df_b2b_view["GRUPO_ACIONADO"] == sel_b2b_grupo]
         if busca_b2b: df_b2b_view = df_b2b_view[df_b2b_view.astype(str).apply(lambda row: row.str.contains(busca_b2b, case=False).any(), axis=1)]
 
         column_config_b2b = {
             "TSK": st.column_config.TextColumn("Número / TSK", disabled=True),
             "TEMPO_DO_CHAMADO": st.column_config.TextColumn("Tempo Chamado", disabled=True),
             "QUADRANTE": st.column_config.TextColumn("QDRs", disabled=True),
+            "GRUPO_ACIONADO": st.column_config.TextColumn("Grupo Acionado", disabled=True),
             "NE_ID": st.column_config.TextColumn("NE ID", disabled=True),
             "END_ID": st.column_config.TextColumn("END ID", disabled=True),
             "FALHA": st.column_config.TextColumn("Falha", disabled=True),
