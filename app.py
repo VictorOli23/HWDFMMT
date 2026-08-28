@@ -654,7 +654,7 @@ elif menu == "📂 Backlog Operacional (Fixa)":
 
         df_bk_view = df.loc[:, ~df.columns.duplicated()].copy()
 
-        c_f1, c_f2, c_f3, c_f4 = st.columns(4)
+        c_f1, c_f2, c_f3, c_f4, c_f5, c_f6 = st.columns([1.2, 1.2, 1, 1, 1.2, 1.5])
         with c_f1:
             sel_cat = st.selectbox("Categoria (Fila/Sainte):", ["Todas", "Fila (Pendentes)", "Saintes (Concluídos)"], key="bk_cat")
         with c_f2:
@@ -664,16 +664,12 @@ elif menu == "📂 Backlog Operacional (Fixa)":
             origem_opts = ["Todas", "FMT", "FMMT (Fusão)"]
             sel_origem = st.selectbox("Origem (Base):", options=origem_opts, key="bk_origem")
         with c_f4:
-            busca_bk = st.text_input("🔍 Busca rápida:", key="bk_busca")
-
-        c_f5, c_f6, c_f7, c_f8 = st.columns(4)
+            sel_anel = st.selectbox("Anel:", options=["Todos", "SIM", "NÃO"], key="bk_anel")
         with c_f5:
-            sel_anel = st.selectbox("Anel Aberto:", options=["Todos", "SIM", "NÃO"], key="bk_anel")
-        with c_f6:
-            sel_dwdm = st.selectbox("DWDM:", options=["Todos", "SIM", "NÃO"], key="bk_dwdm")
-        with c_f7:
             quad_opts = ["Todos"] + sorted([str(x) for x in df_bk_view["QUADRANTE"].dropna().unique()])
             sel_quad = st.selectbox("Quadrante:", options=quad_opts, key="bk_quad")
+        with c_f6:
+            busca_bk = st.text_input("🔍 Busca rápida:", key="bk_busca")
 
         if sel_cat == "Fila (Pendentes)":
             df_bk_view = df_bk_view[df_bk_view["STATUS"].isin(["Não Acionado", "Acionado", "Iniciado"])]
@@ -683,7 +679,6 @@ elif menu == "📂 Backlog Operacional (Fixa)":
         if sel_st != "Todos": df_bk_view = df_bk_view[df_bk_view["STATUS"] == sel_st]
         if sel_origem != "Todas": df_bk_view = df_bk_view[df_bk_view["ORIGEM"] == sel_origem]
         if sel_anel != "Todos": df_bk_view = df_bk_view[df_bk_view["ANEL_ABERTO"] == sel_anel]
-        if sel_dwdm != "Todos": df_bk_view = df_bk_view[df_bk_view["DWDM"] == sel_dwdm]
         if sel_quad != "Todos": df_bk_view = df_bk_view[df_bk_view["QUADRANTE"] == sel_quad]
         if busca_bk: df_bk_view = df_bk_view[df_bk_view.astype(str).apply(lambda row: row.str.contains(busca_bk, case=False).any(), axis=1)]
 
@@ -774,7 +769,7 @@ elif menu == "📱 Backlog Móvel":
             sel_cat_m = st.selectbox("Categoria (Fila/Sainte):", ["Todas", "Fila (Pendentes)", "Saintes (Concluídos)"], key="mv_cat")
         with c_m2:
             st_movel_opts = ["Todos"] + sorted(list(df_movel_view["STATUS"].dropna().unique()))
-            sel_movel_st = st.selectbox("Filtrar Status:", options=st_movel_opts, key="mv_st")
+            sel_movel_st = st.selectbox("Status Específico:", options=st_movel_opts, key="mv_st")
         with c_m3:
             quad_opts_m = ["Todos"] + sorted([str(x) for x in df_movel_view["QUADRANTE"].dropna().unique()])
             sel_movel_quad = st.selectbox("Filtrar Quadrante:", options=quad_opts_m, key="mv_quad")
@@ -947,7 +942,7 @@ elif menu == "💼 Gestão B2B":
             sel_cat_b = st.selectbox("Categoria (Fila/Sainte):", ["Todas", "Fila (Pendentes)", "Saintes (Concluídos)"], key="b2b_cat")
         with c_b2:
             st_b2b_opts = ["Todos"] + sorted(list(df_b2b_view["STATUS"].dropna().unique()))
-            sel_b2b_st = st.selectbox("Filtrar Status:", options=st_b2b_opts, key="b2b_st")
+            sel_b2b_st = st.selectbox("Status Específico:", options=st_b2b_opts, key="b2b_st")
         with c_b3:
             quad_opts_b = ["Todos"] + sorted([str(x) for x in df_b2b_view["QUADRANTE"].dropna().unique()])
             sel_b2b_quad = st.selectbox("Filtrar Quadrante:", options=quad_opts_b, key="b2b_quad")
@@ -1032,6 +1027,8 @@ elif menu == "📺 Apresentação Executiva":
     st.markdown("Visão consolidada do Backbone para report gerencial e tomada de decisão rápida.")
     
     df = load_table("backlog_fixa")
+    df_old = load_table("backlog_fixa_previous")
+    df_hist = load_table("historico_diario")
 
     if df.empty:
         st.warning("Nenhuma base Fixa carregada na nuvem.")
@@ -1045,6 +1042,21 @@ elif menu == "📺 Apresentação Executiva":
         cg2.metric("Anéis Abertos (Crítico)", (df["ANEL_ABERTO"] == "SIM").sum())
         cg3.metric("Equipamentos DWDM", (df["DWDM"] == "SIM").sum())
         cg4.metric("Atenção B2B", (df["IS_B2B"] == "SIM").sum())
+
+        st.divider()
+
+        st.markdown("### 🔄 Fluxo Operacional (Última Atualização)")
+        tsks_old = set(df_old["TSK"].dropna().astype(str).str.strip()) if not df_old.empty else set()
+        tsks_new = set(df["TSK"].dropna().astype(str).str.strip()) if not df.empty else set()
+
+        entrantes_tsks = tsks_new - tsks_old
+        saintes_fisicos = tsks_old - tsks_new
+        saintes_status = df[df["STATUS"].isin(["Tramitado", "Encerrado"])].shape[0]
+        
+        ch1, ch2, ch3 = st.columns(3)
+        ch1.metric("📥 Entrantes (Ao atualizar a base)", len(entrantes_tsks))
+        ch2.metric("📤 Saintes (Saíram ao atualizar a base)", len(saintes_fisicos))
+        ch3.metric("✅ Saintes Atuais (Já Encerrados/Tramitados)", saintes_status)
 
         st.divider()
 
@@ -1068,17 +1080,25 @@ elif menu == "📺 Apresentação Executiva":
             
         st.divider()
 
-        def render_presentation_card(title, emoji, sub_df, color_theme):
+        def render_presentation_card(title, emoji, sub_df, color_theme, extra_metrics=None):
             with st.container(border=True):
                 st.markdown(f"<h3 style='color: {color_theme};'>{emoji} {title}</h3>", unsafe_allow_html=True)
                 stats = get_status_counts(sub_df, status_col="STATUS")
                 
-                c1, c2, c3, c4, c5 = st.columns(5)
-                c1.metric(f"Total na Fila", stats["Total"])
-                c2.metric("🔴 Acionados", stats["Acionado"])
-                c3.metric("🟡 Iniciados", stats["Iniciado"])
-                c4.metric("🔵 Tramitados", stats["Tramitado"])
-                c5.metric("🟢 Encerrados", stats["Encerrado"])
+                if extra_metrics is not None:
+                    c1, c2, c3, c4, c5 = st.columns(5)
+                    c1.metric("🌅 Começou no Dia", extra_metrics.get("iniciou_dia", 0))
+                    c2.metric("🔥 Agora para Tratativa", extra_metrics.get("pendentes_agora", 0))
+                    c3.metric("🔴 Acionados", stats["Acionado"])
+                    c4.metric("🟡 Iniciados", stats["Iniciado"])
+                    c5.metric("✅ Saintes (Encerrados/Tram.)", stats["Tramitado"] + stats["Encerrado"])
+                else:
+                    c1, c2, c3, c4, c5 = st.columns(5)
+                    c1.metric(f"Total na Fila", stats["Total"])
+                    c2.metric("🔴 Acionados", stats["Acionado"])
+                    c3.metric("🟡 Iniciados", stats["Iniciado"])
+                    c4.metric("🔵 Tramitados", stats["Tramitado"])
+                    c5.metric("🟢 Encerrados", stats["Encerrado"])
 
                 if not sub_df.empty:
                     status_df = pd.DataFrame({
@@ -1114,7 +1134,18 @@ elif menu == "📺 Apresentação Executiva":
 
         # 1. Anéis Abertos
         df_aneis = df_view[df_view["ANEL_ABERTO"] == "SIM"]
-        render_presentation_card("Anéis Abertos (Alto Impacto)", "🚨", df_aneis, "#DC2626")
+        
+        # Logica para Anéis - Início do Dia x Agora
+        if not df_hist.empty:
+            last_snap_date = df_hist["data_snapshot"].max()
+            df_start_day = df_hist[df_hist["data_snapshot"] == last_snap_date]
+            aneis_start = df_start_day[(df_start_day["ANEL_ABERTO"] == "SIM") & (~df_start_day["STATUS"].isin(["Tramitado", "Encerrado"]))].shape[0]
+        else:
+            aneis_start = df_old[(df_old["ANEL_ABERTO"] == "SIM") & (~df_old["STATUS"].isin(["Tramitado", "Encerrado"]))].shape[0] if not df_old.empty else 0
+            
+        aneis_agora = df_aneis[~df_aneis["STATUS"].isin(["Tramitado", "Encerrado"])].shape[0]
+
+        render_presentation_card("Anéis Abertos (Alto Impacto)", "🚨", df_aneis, "#DC2626", extra_metrics={"iniciou_dia": aneis_start, "pendentes_agora": aneis_agora})
 
         # 2. DWDM
         df_dwdm = df_view[df_view["DWDM"] == "SIM"]
