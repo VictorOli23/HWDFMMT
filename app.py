@@ -1112,8 +1112,24 @@ elif menu == "🚨 Casos Críticos":
     st.title("🚨 Gestão de Casos Críticos")
     st.markdown("Insira e atualize os casos críticos manualmente. Use o gerador abaixo para copiar o relatório e enviar por e-mail.")
 
+    # Cria tabela na nuvem se não existir (apenas para essa aba)
+    with engine.connect() as conn:
+        conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS casos_criticos (
+                "TIPO" VARCHAR(50),
+                "Numero Chamado" VARCHAR(50),
+                "NE-ID" VARCHAR(100),
+                "END-ID" VARCHAR(100),
+                "QDR" VARCHAR(50),
+                "Status atual" VARCHAR(50),
+                "Descrição" TEXT,
+                "Previsão e Nivel Escalonado" VARCHAR(150)
+            )
+        """))
+        conn.commit()
+
     df_crit = load_table("casos_criticos")
-    cols_crit = ["TIPO", "Numero Chamado", "NE-ID", "END-ID", "QDR", "Status atual", "Descrição", "Previsão", "Nivel Escalonado"]
+    cols_crit = ["TIPO", "Numero Chamado", "NE-ID", "END-ID", "QDR", "Status atual", "Descrição", "Previsão e Nivel Escalonado"]
     
     if df_crit.empty:
         df_crit = pd.DataFrame(columns=cols_crit)
@@ -1127,12 +1143,14 @@ elif menu == "🚨 Casos Críticos":
     config = {
         "TIPO": st.column_config.SelectboxColumn("TIPO", options=["Ultrafibra", "100G", "400G", "Massiva"]),
         "Descrição": st.column_config.TextColumn("Descrição", width="large"),
+        "Previsão e Nivel Escalonado": st.column_config.TextColumn("Previsão e Nivel Escalonado", width="large"),
     }
 
     edited_crit = st.data_editor(df_crit, num_rows="dynamic", column_config=config, use_container_width=True)
 
     if st.button("💾 Salvar Casos Críticos", type="primary"):
         edited_crit.to_sql("casos_criticos", engine, if_exists="replace", index=False)
+        st.cache_data.clear()
         st.success("Tabela de casos críticos salva com sucesso!")
         st.rerun()
 
@@ -1146,7 +1164,6 @@ elif menu == "🚨 Casos Críticos":
         df_mail = df_mail[df_mail["TIPO"] == sel_tipo]
 
     if not df_mail.empty:
-        # Gera Tabela HTML para E-mail com CSS Inline forte
         html_table = df_mail.to_html(index=False)
         html_table = html_table.replace('<table border="1" class="dataframe">', '<table style="width:100%; border-collapse: collapse; font-family: Arial, sans-serif; font-size: 13px; color: #000; border: 1px solid #ccc;">')
         html_table = html_table.replace('<th>', '<th style="background-color: #B91C1C; color: white; padding: 8px; border: 1px solid #ddd; text-align: center; font-weight: bold;">')
@@ -1205,16 +1222,82 @@ elif menu == "📋 Base Geral FMT":
 # ==========================================
 elif menu == "🗄️ Histórico CRC":
     st.title("🗄️ Base Cumulativa CRC")
-    st.caption("Esta base é gravada de forma permanente no banco de dados na nuvem.")
+    st.caption("Gestão e edição do Histórico Permanente CRC.")
 
     df_crc_view = get_crc_data()
-    st.metric("Total de Registros Armazenados no Histórico CRC", len(df_crc_view))
     
-    busca_crc = st.text_input("Buscar TSK no Histórico CRC:")
-    if busca_crc:
-        df_crc_view = df_crc_view[df_crc_view["tsk"].str.contains(busca_crc, case=False, na=False)]
+    if df_crc_view.empty:
+        st.info("O Histórico CRC está vazio. Faça um upload com os dados da aba CRC na tela inicial para começar.")
+    else:
+        st.metric("Total de Registros Armazenados no Histórico CRC", len(df_crc_view))
+        
+        c_c1, c_c2 = st.columns(2)
+        with c_c1:
+            busca_crc = st.text_input("🔍 Buscar TSK ou NE ID no Histórico CRC:")
+        with c_c2:
+            # Mistura os END IDs reais que vieram da planilha com os atalhos de roteamento desejados
+            current_end_ids = list(df_crc_view["end_id"].dropna().astype(str).unique())
+            custom_opts = ["FMMT", "Encerrado", "FMO", "Outros"]
+            all_end_id_options = ["Todos"] + sorted(list(set(current_end_ids + custom_opts)))
+            sel_end_id = st.selectbox("Filtrar por END ID / Equipe:", options=all_end_id_options)
 
-    st.dataframe(df_crc_view, use_container_width=True)
+        if busca_crc:
+            df_crc_view = df_crc_view[df_crc_view.astype(str).apply(lambda row: row.str.contains(busca_crc, case=False).any(), axis=1)]
+        
+        if sel_end_id != "Todos":
+            df_crc_view = df_crc_view[df_crc_view["end_id"].astype(str) == sel_end_id]
+
+        for c in ["tsk", "ne_id", "end_id", "status", "aging", "descricao", "data_atualizacao"]:
+            if c not in df_crc_view.columns:
+                df_crc_view[c] = ""
+        
+        # Opções suspensas que incluem tanto o que já está na tabela quanto as suas tags
+        end_id_col_opts = sorted(list(set(current_end_ids + custom_opts)))
+
+        col_cfg_crc = {
+            "tsk": st.column_config.TextColumn("TSK", disabled=True),
+            "ne_id": st.column_config.TextColumn("NE ID", disabled=True),
+            "end_id": st.column_config.SelectboxColumn("END ID / Equipe", options=end_id_col_opts),
+            "status": st.column_config.SelectboxColumn("Status", options=["Acionado", "Iniciado", "Tramitado", "Encerrado", "Não Acionado"]),
+            "aging": st.column_config.TextColumn("Aging", disabled=True),
+            "descricao": st.column_config.TextColumn("Descrição", width="large"),
+            "data_atualizacao": st.column_config.TextColumn("Última Atualização", disabled=True)
+        }
+
+        edited_crc = st.data_editor(
+            df_crc_view[["tsk", "ne_id", "end_id", "status", "aging", "descricao", "data_atualizacao"]], 
+            column_config=col_cfg_crc, 
+            use_container_width=True, 
+            height=500, 
+            key="crc_editor"
+        )
+
+        col_crc_btn1, col_crc_btn2 = st.columns([1, 4])
+        with col_crc_btn1:
+            if st.button("💾 Salvar Alterações no Histórico CRC", type="primary", use_container_width=True):
+                now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                with engine.connect() as conn:
+                    for idx, row in edited_crc.iterrows():
+                        old_row = df_crc_view.loc[idx]
+                        if (row["status"] != old_row["status"] or 
+                            row["descricao"] != old_row["descricao"] or 
+                            row["end_id"] != old_row["end_id"]):
+                            
+                            conn.execute(text("""
+                                UPDATE crc_historico 
+                                SET status = :st, descricao = :desc, end_id = :end, data_atualizacao = :dt 
+                                WHERE tsk = :tsk
+                            """), {
+                                "st": row["status"], 
+                                "desc": row["descricao"], 
+                                "end": row["end_id"], 
+                                "dt": now,
+                                "tsk": row["tsk"]
+                            })
+                    conn.commit()
+                st.cache_data.clear()
+                st.success("✅ Histórico CRC atualizado com sucesso!")
+                st.rerun()
 
 # ==========================================
 # ABA 12: HISTÓRICO DIÁRIO (EOD)
