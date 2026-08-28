@@ -654,22 +654,28 @@ elif menu == "📂 Backlog Operacional (Fixa)":
 
         df_bk_view = df.loc[:, ~df.columns.duplicated()].copy()
 
-        c_f1, c_f2, c_f3, c_f4, c_f5, c_f6 = st.columns([1.2, 1.2, 1, 1, 1.2, 1.5])
-        with c_f1:
+        # LINHA 1 DE FILTROS
+        r1_c1, r1_c2, r1_c3, r1_c4 = st.columns(4)
+        with r1_c1:
             sel_cat = st.selectbox("Categoria (Fila/Sainte):", ["Todas", "Fila (Pendentes)", "Saintes (Concluídos)"], key="bk_cat")
-        with c_f2:
+        with r1_c2:
             st_opts = ["Todos"] + sorted(list(df_bk_view["STATUS"].dropna().unique()))
             sel_st = st.selectbox("Status Específico:", options=st_opts, key="bk_status")
-        with c_f3:
+        with r1_c3:
             origem_opts = ["Todas", "FMT", "FMMT (Fusão)"]
             sel_origem = st.selectbox("Origem (Base):", options=origem_opts, key="bk_origem")
-        with c_f4:
-            sel_anel = st.selectbox("Anel:", options=["Todos", "SIM", "NÃO"], key="bk_anel")
-        with c_f5:
+        with r1_c4:
+            busca_bk = st.text_input("🔍 Busca rápida:", key="bk_busca")
+
+        # LINHA 2 DE FILTROS
+        r2_c1, r2_c2, r2_c3, r2_c4 = st.columns(4)
+        with r2_c1:
+            sel_anel = st.selectbox("Anel Aberto:", options=["Todos", "SIM", "NÃO"], key="bk_anel")
+        with r2_c2:
+            sel_dwdm = st.selectbox("DWDM:", options=["Todos", "SIM", "NÃO"], key="bk_dwdm")
+        with r2_c3:
             quad_opts = ["Todos"] + sorted([str(x) for x in df_bk_view["QUADRANTE"].dropna().unique()])
             sel_quad = st.selectbox("Quadrante:", options=quad_opts, key="bk_quad")
-        with c_f6:
-            busca_bk = st.text_input("🔍 Busca rápida:", key="bk_busca")
 
         if sel_cat == "Fila (Pendentes)":
             df_bk_view = df_bk_view[df_bk_view["STATUS"].isin(["Não Acionado", "Acionado", "Iniciado"])]
@@ -679,6 +685,7 @@ elif menu == "📂 Backlog Operacional (Fixa)":
         if sel_st != "Todos": df_bk_view = df_bk_view[df_bk_view["STATUS"] == sel_st]
         if sel_origem != "Todas": df_bk_view = df_bk_view[df_bk_view["ORIGEM"] == sel_origem]
         if sel_anel != "Todos": df_bk_view = df_bk_view[df_bk_view["ANEL_ABERTO"] == sel_anel]
+        if sel_dwdm != "Todos": df_bk_view = df_bk_view[df_bk_view["DWDM"] == sel_dwdm]
         if sel_quad != "Todos": df_bk_view = df_bk_view[df_bk_view["QUADRANTE"] == sel_quad]
         if busca_bk: df_bk_view = df_bk_view[df_bk_view.astype(str).apply(lambda row: row.str.contains(busca_bk, case=False).any(), axis=1)]
 
