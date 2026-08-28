@@ -90,7 +90,6 @@ def run_daily_snapshot():
             return
         
         if last_date != today_str:
-            # Virou o dia! Salva a foto do dia anterior no Histórico de Dias
             try:
                 df_fixa = pd.read_sql_table('backlog_fixa', conn)
                 if not df_fixa.empty:
@@ -99,7 +98,6 @@ def run_daily_snapshot():
             except:
                 pass
             
-            # Zera as tabelas operacionais do dia
             tables_to_clear = ['backlog_fixa', 'backlog_fmmt', 'backlog_movel', 'backlog_b2b', 'backlog_grafana', 'backlog_fixa_previous']
             for t in tables_to_clear:
                 conn.execute(text(f"DROP TABLE IF EXISTS {t}"))
@@ -944,24 +942,22 @@ elif menu == "💼 Gestão B2B":
 
         df_b2b_view = df_b2b.loc[:, ~df_b2b.columns.duplicated()].copy()
 
-        c_b1, c_b2, c_b3, c_b4 = st.columns(4)
+        c_b1, c_b2, c_b3, c_b4, c_b5 = st.columns([1, 1, 1.2, 1.2, 2])
         with c_b1:
             sel_cat_b = st.selectbox("Categoria (Fila/Sainte):", ["Todas", "Fila (Pendentes)", "Saintes (Concluídos)"], key="b2b_cat")
         with c_b2:
             st_b2b_opts = ["Todos"] + sorted(list(df_b2b_view["STATUS"].dropna().unique()))
-            sel_b2b_st = st.selectbox("Status Específico:", options=st_b2b_opts, key="b2b_st")
+            sel_b2b_st = st.selectbox("Filtrar Status:", options=st_b2b_opts, key="b2b_st")
         with c_b3:
             quad_opts_b = ["Todos"] + sorted([str(x) for x in df_b2b_view["QUADRANTE"].dropna().unique()])
             sel_b2b_quad = st.selectbox("Filtrar Quadrante:", options=quad_opts_b, key="b2b_quad")
         with c_b4:
             sel_b2b_rede = st.selectbox("Rede:", options=["Todas", "Fixa", "Móvel"], key="b2b_rede")
-
-        c_b5, c_b6 = st.columns([1, 3])
         with c_b5:
             grupo_opts = ["Todos"] + sorted(list(df_b2b_view["GRUPO_ACIONADO"].dropna().unique()))
             sel_b2b_grupo = st.selectbox("Grupo Acionado:", options=grupo_opts, key="b2b_grupo")
-        with c_b6:
-            busca_b2b = st.text_input("🔍 Busca B2B (Número / TSK, NE ID, Falha, Técnico):", key="b2b_busca")
+            
+        busca_b2b = st.text_input("🔍 Busca B2B (Número / TSK, NE ID, Falha, Técnico):", key="b2b_busca")
 
         if sel_cat_b == "Fila (Pendentes)":
             df_b2b_view = df_b2b_view[df_b2b_view["STATUS"].isin(["Não Acionado", "Acionado", "Iniciado"])]
@@ -1075,68 +1071,77 @@ elif menu == "📺 Apresentação Executiva":
         df_view = df if selected_aging == "Todos" else df[df["AGING"].astype(str) == selected_aging]
         st.write("")
 
-        st.markdown("### 📍 Visão Geográfica (Top 10 Quadrantes Impactados)")
-        if "QUADRANTE" in df_view.columns and not df_view.empty:
-            quad_counts = df_view[df_view["QUADRANTE"] != "NÃO INFORMADO"]["QUADRANTE"].value_counts().head(10)
-            if not quad_counts.empty:
-                st.bar_chart(quad_counts, color="#F59E0B")
-            else:
-                st.info("Nenhum quadrante mapeado para os chamados nesta faixa de Aging.")
-        else:
-            st.info("Dados de quadrante indisponíveis para este filtro.")
-            
-        st.divider()
-
         def render_presentation_card(title, emoji, sub_df, color_theme, extra_metrics=None):
             with st.container(border=True):
                 st.markdown(f"<h3 style='color: {color_theme};'>{emoji} {title}</h3>", unsafe_allow_html=True)
                 stats = get_status_counts(sub_df, status_col="STATUS")
                 
+                # LINHA DE MÉTRICAS (MUITO MAIS CLEAN)
                 if extra_metrics is not None:
-                    c1, c2, c3, c4, c5 = st.columns(5)
-                    c1.metric("🌅 Começou no Dia", extra_metrics.get("iniciou_dia", 0))
-                    c2.metric("🔥 Agora para Tratativa", extra_metrics.get("pendentes_agora", 0))
-                    c3.metric("🔴 Acionados", stats["Acionado"])
-                    c4.metric("🟡 Iniciados", stats["Iniciado"])
-                    c5.metric("✅ Saintes (Encerrados/Tram.)", stats["Tramitado"] + stats["Encerrado"])
+                    cm1, cm2, cm3 = st.columns(3)
+                    cm1.metric("🌅 Começou no Dia", extra_metrics.get("iniciou_dia", 0))
+                    cm2.metric("🔥 Agora para Tratativa", extra_metrics.get("pendentes_agora", 0))
+                    cm3.metric("Total Atual na Fila", stats["Total"])
                 else:
-                    c1, c2, c3, c4, c5 = st.columns(5)
-                    c1.metric(f"Total na Fila", stats["Total"])
-                    c2.metric("🔴 Acionados", stats["Acionado"])
-                    c3.metric("🟡 Iniciados", stats["Iniciado"])
-                    c4.metric("🔵 Tramitados", stats["Tramitado"])
-                    c5.metric("🟢 Encerrados", stats["Encerrado"])
+                    st.metric("Total na Fila", stats["Total"])
+                    
+                st.write("---")
 
-                if not sub_df.empty:
+                # LATERAL: STATUS (TEXTO) | GRÁFICO STATUS | GRÁFICO QUADRANTE
+                c_metrics, c_chart1, c_chart2 = st.columns([1.2, 1.5, 1.5])
+                
+                with c_metrics:
+                    st.markdown("**Status Resumido:**")
+                    st.markdown(f"🔴 **{stats['Acionado']}** Acionados")
+                    st.markdown(f"🟡 **{stats['Iniciado']}** Iniciados")
+                    st.markdown(f"🔵 **{stats['Tramitado']}** Tramitados")
+                    st.markdown(f"🟢 **{stats['Encerrado']}** Encerrados")
+
+                with c_chart1:
+                    st.markdown("**Distribuição Lateral:**")
                     status_df = pd.DataFrame({
-                        "Status": ["Acionados", "Iniciados", "Tramitados", "Encerrados"],
-                        "Quantidade": [stats["Acionado"], stats["Iniciado"], stats["Tramitado"], stats["Encerrado"]]
+                        "Status": ["Acionados", "Iniciados", "Tram.", "Encerr."],
+                        "Qtde": [stats["Acionado"], stats["Iniciado"], stats["Tramitado"], stats["Encerrado"]]
                     }).set_index("Status")
+                    st.bar_chart(status_df, height=180, color=color_theme, use_container_width=True)
                     
-                    col_chart1, col_chart2, col_table = st.columns([1, 1.5, 3])
-                    
-                    with col_chart1:
-                        st.write("**Distribuição de Status**")
-                        st.bar_chart(status_df, use_container_width=True, color=color_theme)
-                        
-                    with col_chart2:
-                        st.write("**Top 5 Quadrantes**")
-                        if "QUADRANTE" in sub_df.columns:
-                            quad_counts_card = sub_df[sub_df["QUADRANTE"] != "NÃO INFORMADO"]["QUADRANTE"].value_counts().head(5)
-                            if not quad_counts_card.empty:
-                                st.bar_chart(quad_counts_card, use_container_width=True, color="#F59E0B")
-                            else:
-                                st.caption("Sem dados de quadrante.")
+                with c_chart2:
+                    st.markdown("**Top 5 Quadrantes:**")
+                    if "QUADRANTE" in sub_df.columns:
+                        quad_counts_card = sub_df[sub_df["QUADRANTE"] != "NÃO INFORMADO"]["QUADRANTE"].value_counts().head(5)
+                        if not quad_counts_card.empty:
+                            st.bar_chart(quad_counts_card, height=180, color="#F59E0B", use_container_width=True)
                         else:
-                            st.caption("Sem dados de quadrante.")
-                            
-                    with col_table:
-                        st.write("**Detalhamento**")
-                        with st.expander(f"Visualizar os {len(sub_df)} registros em tabela visual"):
-                            cols_show = [c for c in ["TSK", "TEMPO_DO_CHAMADO", "ANEL_ABERTO", "DWDM", "NE_ID", "QUADRANTE", "STATUS", "RESUMO", "TECNICO"] if c in sub_df.columns]
-                            st.dataframe(sub_df[cols_show], use_container_width=True, hide_index=True)
-                else:
-                    st.success(f"Nenhum incidente crítico para {title} pendente nesta faixa de Aging.")
+                            st.caption("Sem dados.")
+                    else:
+                        st.caption("Sem dados.")
+
+                # TABS INTERATIVAS (FILTRO DIRETO NO CARD)
+                st.markdown("**🔍 Detalhamento por Status (Clique nas Abas Abaixo):**")
+                t1, t2, t3, t4, t5 = st.tabs(["🔴 Acionados", "🟡 Iniciados", "🔵 Tramitados", "🟢 Encerrados", "📋 Ver Todos"])
+                
+                cols_show = [c for c in ["TSK", "TEMPO_DO_CHAMADO", "ANEL_ABERTO", "DWDM", "NE_ID", "QUADRANTE", "STATUS", "RESUMO", "TECNICO"] if c in sub_df.columns]
+                
+                with t1:
+                    df_acionado = sub_df[sub_df["STATUS"] == "Acionado"]
+                    if not df_acionado.empty: st.dataframe(df_acionado[cols_show], use_container_width=True, hide_index=True)
+                    else: st.caption("Nenhum chamado Acionado.")
+                with t2:
+                    df_ini = sub_df[sub_df["STATUS"] == "Iniciado"]
+                    if not df_ini.empty: st.dataframe(df_ini[cols_show], use_container_width=True, hide_index=True)
+                    else: st.caption("Nenhum chamado Iniciado.")
+                with t3:
+                    df_tram = sub_df[sub_df["STATUS"] == "Tramitado"]
+                    if not df_tram.empty: st.dataframe(df_tram[cols_show], use_container_width=True, hide_index=True)
+                    else: st.caption("Nenhum chamado Tramitado.")
+                with t4:
+                    df_enc = sub_df[sub_df["STATUS"] == "Encerrado"]
+                    if not df_enc.empty: st.dataframe(df_enc[cols_show], use_container_width=True, hide_index=True)
+                    else: st.caption("Nenhum chamado Encerrado.")
+                with t5:
+                    if not sub_df.empty: st.dataframe(sub_df[cols_show], use_container_width=True, hide_index=True)
+                    else: st.caption("Nenhum chamado no total.")
+
             st.write("")
 
         # 1. Anéis Abertos
