@@ -926,7 +926,7 @@ elif menu == "💼 Gestão B2B":
 
         df_b2b_view = df_b2b.loc[:, ~df_b2b.columns.duplicated()].copy()
 
-        c_b1, c_b2, c_b3, c_b4 = st.columns([1, 1, 1.5, 2])
+        c_b1, c_b2, c_b3, c_b4, c_b5 = st.columns([1, 1, 1.2, 1.2, 2])
         with c_b1:
             st_b2b_opts = ["Todos"] + sorted(list(df_b2b_view["STATUS"].dropna().unique()))
             sel_b2b_st = st.selectbox("Filtrar Status:", options=st_b2b_opts, key="b2b_st")
@@ -937,11 +937,23 @@ elif menu == "💼 Gestão B2B":
             grupo_opts = ["Todos"] + sorted(list(df_b2b_view["GRUPO_ACIONADO"].dropna().unique()))
             sel_b2b_grupo = st.selectbox("Grupo Acionado:", options=grupo_opts, key="b2b_grupo")
         with c_b4:
+            sel_b2b_rede = st.selectbox("Rede:", options=["Todas", "Fixa", "Móvel"], key="b2b_rede")
+        with c_b5:
             busca_b2b = st.text_input("🔍 Busca B2B (Número / TSK, NE ID, Falha, Técnico):", key="b2b_busca")
 
         if sel_b2b_st != "Todos": df_b2b_view = df_b2b_view[df_b2b_view["STATUS"] == sel_b2b_st]
         if sel_b2b_quad != "Todos": df_b2b_view = df_b2b_view[df_b2b_view["QUADRANTE"] == sel_b2b_quad]
         if sel_b2b_grupo != "Todos": df_b2b_view = df_b2b_view[df_b2b_view["GRUPO_ACIONADO"] == sel_b2b_grupo]
+        
+        def is_fixa(val):
+            v = str(val).strip().upper()
+            return v in ["", "NAN", "NONE", "NULL", "-"]
+
+        if sel_b2b_rede == "Fixa":
+            df_b2b_view = df_b2b_view[df_b2b_view["NE_ID"].apply(is_fixa)]
+        elif sel_b2b_rede == "Móvel":
+            df_b2b_view = df_b2b_view[~df_b2b_view["NE_ID"].apply(is_fixa)]
+            
         if busca_b2b: df_b2b_view = df_b2b_view[df_b2b_view.astype(str).apply(lambda row: row.str.contains(busca_b2b, case=False).any(), axis=1)]
 
         column_config_b2b = {
@@ -1112,7 +1124,6 @@ elif menu == "🚨 Casos Críticos":
     st.title("🚨 Gestão de Casos Críticos")
     st.markdown("Insira e atualize os casos críticos manualmente. Use o gerador abaixo para copiar o relatório e enviar por e-mail.")
 
-    # Cria tabela na nuvem se não existir (apenas para essa aba)
     with engine.connect() as conn:
         conn.execute(text("""
             CREATE TABLE IF NOT EXISTS casos_criticos (
@@ -1235,7 +1246,6 @@ elif menu == "🗄️ Histórico CRC":
         with c_c1:
             busca_crc = st.text_input("🔍 Buscar TSK ou NE ID no Histórico CRC:")
         with c_c2:
-            # Mistura os END IDs reais que vieram da planilha com os atalhos de roteamento desejados
             current_end_ids = list(df_crc_view["end_id"].dropna().astype(str).unique())
             custom_opts = ["FMMT", "Encerrado", "FMO", "Outros"]
             all_end_id_options = ["Todos"] + sorted(list(set(current_end_ids + custom_opts)))
@@ -1251,7 +1261,6 @@ elif menu == "🗄️ Histórico CRC":
             if c not in df_crc_view.columns:
                 df_crc_view[c] = ""
         
-        # Opções suspensas que incluem tanto o que já está na tabela quanto as suas tags
         end_id_col_opts = sorted(list(set(current_end_ids + custom_opts)))
 
         col_cfg_crc = {
