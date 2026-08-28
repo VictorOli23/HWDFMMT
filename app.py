@@ -380,11 +380,14 @@ if menu == "👤 Gestão de Usuários (Admin)":
     st.markdown("### 📋 Usuários Cadastrados")
     try:
         with engine.connect() as conn:
-            df_users = pd.read_sql_query("SELECT username as Usuário, nome_completo as Nome, cargo as Cargo FROM usuarios_equipe", conn)
+            # Seleciona sem alias para evitar problemas de case/acentuação no PostgreSQL
+            df_users = pd.read_sql_query("SELECT username, nome_completo, cargo FROM usuarios_equipe", conn)
+            # Renomeia via Pandas (100% seguro)
+            df_users.rename(columns={'username': 'Usuário', 'nome_completo': 'Nome', 'cargo': 'Cargo'}, inplace=True)
     except:
         df_users = pd.DataFrame()
         
-    if not df_users.empty:
+    if not df_users.empty and "Usuário" in df_users.columns:
         st.dataframe(df_users, use_container_width=True, hide_index=True)
         
         with st.expander("🗑️ Excluir Usuário", expanded=False):
@@ -1139,9 +1142,9 @@ elif menu == "📺 Apresentação Executiva":
                         if not quad_counts_card.empty:
                             st.bar_chart(quad_counts_card, height=180, color="#F59E0B", use_container_width=True)
                         else:
-                            st.caption("Sem dados.")
+                            st.caption("Sem dados de quadrante.")
                     else:
-                        st.caption("Sem dados.")
+                        st.caption("Sem dados de quadrante.")
 
                 # TABS INTERATIVAS (FILTRO DIRETO NO CARD)
                 st.markdown("**🔍 Detalhamento por Status (Clique nas Abas Abaixo):**")
