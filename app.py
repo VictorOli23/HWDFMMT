@@ -18,15 +18,6 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# CSS para a Animação do Vermelho Piscando (Blinker) no AGING > 10 dias
-st.markdown("""
-    <style>
-    @keyframes blinker {
-        50% { opacity: 0.3; }
-    }
-    </style>
-""", unsafe_allow_html=True)
-
 if 'logged_in' not in st.session_state:
     st.session_state['logged_in'] = False
 if 'username' not in st.session_state:
@@ -162,39 +153,76 @@ def verify_login(username, password):
     return False, False
 
 def apply_colors(df):
-    """Aplica o motor de cores estritamente na coluna AGING, baseada na Matriz de SLA."""
+    """Aplica o motor de cores estritamente na coluna de tempo real (TEMPO_DO_CHAMADO e AGING)."""
     def style_aging(val):
         s = str(val).strip().lower()
-        m = re.search(r'(\d+)', s)
-        if not m: return ''
-        days = int(m.group(1))
+        if not s or s in ['nan', 'none', '-']: return ''
         
-        # Matriz de Cores SLA (Em cascata do mais grave ao mais brando)
+        days = 0.0
+        m1 = re.search(r'(\d+)\s*d', s)
+        if m1:
+            days = float(m1.group(1))
+        else:
+            m2 = re.search(r'(\d+([.,]\d+)?)', s)
+            if m2:
+                days = float(m2.group(1).replace(',', '.'))
+        
+        # Escala de cores do Aging baseada na regra SLA do NOC
         if days >= 10:
-            return 'background-color: #8B0000; color: #FFFFFF; font-weight: bold; animation: blinker 1.2s linear infinite;'
+            # Maior de 10 dias (Vermelho Escuro Alerta Máximo para compensar falta de animação no Grid)
+            return 'background-color: #8B0000; color: white; font-weight: bold;'
         elif days >= 5:
-            return 'background-color: #DC2626; color: #FFFFFF; font-weight: bold;'
+            # 5 a 10 dias (Vermelho Padrão)
+            return 'background-color: #DC2626; color: white; font-weight: bold;'
         elif days >= 4:
-            return 'background-color: #F97316; color: #FFFFFF; font-weight: bold;'
+            # Superior a 3 dias (Considerado a partir de 4 como Laranja)
+            return 'background-color: #F97316; color: white; font-weight: bold;'
         elif days >= 3:
-            return 'background-color: #1E3A8A; color: #FFFFFF; font-weight: bold;'
+            # 3 a 5 dias (Azul Escuro)
+            return 'background-color: #1E3A8A; color: white; font-weight: bold;'
         elif days >= 1:
+            # 1 a 3 dias (Azul Claro)
             return 'background-color: #BAE6FD; color: #0369A1; font-weight: bold;'
-        return '' # 0 Dias fica sem cor
+        return ''
 
     try:
         styler = df.style
-        if 'AGING' in df.columns:
-            if hasattr(styler, 'map'):
-                styler = styler.map(style_aging, subset=['AGING'])
-            else:
-                styler = styler.applymap(style_aging, subset=['AGING'])
+        # Aplicando tanto no 'AGING' genérico quanto no 'TEMPO_DO_CHAMADO' que é a coluna mostrada
+        for col in ['AGING', 'aging', 'TEMPO_DO_CHAMADO']:
+            if col in df.columns:
+                styler = styler.map(style_aging, subset=[col]) if hasattr(styler, 'map') else styler.applymap(style_aging, subset=[col])
         return styler
     except:
         return df
 
+if not st.session_state['logged_in']:
+    st.markdown("<h1 style='text-align: center; color: #1E3A8A;'>📡 NOC FMT Login</h1>", unsafe_allow_html=True)
+    st.markdown("---")
+    
+    col_l1, col_l2, col_l3 = st.columns([1, 1, 1])
+    with col_l2:
+        with st.form("login_form"):
+            st.write("Insira suas credenciais corporativas")
+            user_input = st.text_input("Usuário")
+            pass_input = st.text_input("Senha", type="password")
+            submitted = st.form_submit_button("Entrar no Sistema", use_container_width=True)
+            
+            if submitted:
+                if not user_input or not pass_input:
+                    st.warning("Preencha todos os campos.")
+                else:
+                    auth_ok, is_admin = verify_login(user_input, pass_input)
+                    if auth_ok:
+                        st.session_state['logged_in'] = True
+                        st.session_state['username'] = user_input
+                        st.session_state['is_admin'] = is_admin
+                        st.rerun()
+                    else:
+                        st.error("Usuário ou senha incorretos.")
+    st.stop()
+
 # ==========================================
-# 4. FUNÇÕES DE BANCO DE DADOS E CÁLCULOS
+# 4. FUNÇÕES DE BANCO DE DADOS E LIMPEZA
 # ==========================================
 def upsert_quadrantes(df_quad):
     col_end = next((c for c in df_quad.columns if "END" in str(c).upper()), df_quad.columns[0])
@@ -251,6 +279,7 @@ def get_crc_data():
 
 def load_file(file, target_sheet_hints=None):
     if file is None: return pd.DataFrame()
+    
     if file.name.endswith(".csv"):
         content = file.getvalue().decode('utf-8', errors='ignore')
         lines = content.splitlines()
@@ -296,6 +325,7 @@ def extrair_colunas(df):
         "TIPO_EQUIPAMENTO": get_single_series(df, ["TIPO DO EQUIPAMENTO", "TIPO NE", "EQUIPAMENTO"], ""),
         "STATUS": get_single_series(df, ["STATUS"], "Não Acionado"),
         "FALHA": get_single_series(df, ["ALARME", "FALHA"], ""),
+        "AGING": get_single_series(df, ["AGING"], "-"),
         "DATA_CRIACAO": get_single_series(df, ["DATA DE CRIAÇÃO", "DATA_CRIACAO", "CRIA"], ""),
         "TECNICO": get_single_series(df, ["NOME DO TÉCNICO", "NOME TÉCNICO CAMPO", "TÉCNICO", "TECNICO", "RESPONSÁVEL"], ""),
         "RESUMO": get_single_series(df, ["RESUMO", "OBSERVAÇÕES"], ""),
@@ -331,22 +361,8 @@ def calculate_tempo_chamado(row):
             days = diff.days; hours, remainder = divmod(diff.seconds, 3600); mins, _ = divmod(remainder, 60)
             return f"{days}d {hours:02d}h {mins:02d}m"
         except: pass
-    return "0d 00h 00m"
-
-def fix_aging_view(df):
-    """Calcula e formata o AGING diretamente na tabela baseada no Downtime atualizado"""
-    if df.empty or "TEMPO_DO_CHAMADO" not in df.columns:
-        return df
-    df_out = df.copy()
-    def get_d(row):
-        t = str(row.get("TEMPO_DO_CHAMADO", ""))
-        m = re.search(r'(\d+)\s*d', t)
-        if m:
-            val = int(m.group(1))
-            return f"{val} dia{'s' if val != 1 else ''}"
-        return "0 dias"
-    df_out["AGING"] = df_out.apply(get_d, axis=1)
-    return df_out
+    ag_val = str(row.get("AGING", "")).strip()
+    return ag_val if ag_val and ag_val not in ["nan", "None"] else "0d 00h"
 
 # ==========================================
 # 6. MENUS DA BARRA LATERAL
@@ -476,6 +492,7 @@ elif menu == "📥 Upload & Processamento":
             with st.spinner("Realizando a Fusão das bases, preservando edições e cruzando Anéis..."):
                 st.cache_data.clear() 
                 
+                # PRESERVAR BASES ANTIGAS
                 df_old_fixa = load_table("backlog_fixa")
                 df_old_movel = load_table("backlog_movel")
                 df_old_b2b = load_table("backlog_b2b")
@@ -506,6 +523,9 @@ elif menu == "📥 Upload & Processamento":
                     df_crc_raw = load_file(f_crc, ["CRC"])
                     if not df_crc_raw.empty: upsert_crc(df_crc_raw)
 
+                # ==========================================================
+                # FUSÃO: PUXA OS CHAMADOS FALTANTES DA FMMT PARA A FIXA
+                # ==========================================================
                 quad_map = get_quadrantes_map()
                 
                 df_fmt_base = pd.DataFrame(extrair_colunas(df_fmt_raw))
@@ -531,6 +551,7 @@ elif menu == "📥 Upload & Processamento":
                 df_fmt["QUADRANTE"] = df_fmt["QUADRANTE"].fillna(df_fmt["END_ID"].astype(str).apply(lambda x: re.search(r'(QD\s*\d+|ANF\s*\d+)', str(x), re.IGNORECASE).group(0).upper() if re.search(r'(QD\s*\d+|ANF\s*\d+)', str(x), re.IGNORECASE) else "NÃO INFORMADO"))
                 df_fmt["TEMPO_DO_CHAMADO"] = df_fmt.apply(calculate_tempo_chamado, axis=1)
 
+                # ROTINA DE RETENÇÃO DE DADOS (FIXA)
                 if not df_old_fixa.empty:
                     dict_st = dict(zip(df_old_fixa["TSK"], df_old_fixa["STATUS"]))
                     dict_res = dict(zip(df_old_fixa["TSK"], df_old_fixa["RESUMO"]))
@@ -541,6 +562,9 @@ elif menu == "📥 Upload & Processamento":
                     df_fmt["TECNICO"] = df_fmt.apply(lambda r: dict_tec.get(r["TSK"], r["TECNICO"]), axis=1)
                     df_fmt["OBS"] = df_fmt.apply(lambda r: dict_obs.get(r["TSK"], r["OBS"]), axis=1)
 
+                # ==========================================================
+                # OMNI-SEARCH EXCLUSIVO CONTRA GRAFANA
+                # ==========================================================
                 global_names = set()
                 global_events = set()
                 
@@ -571,6 +595,7 @@ elif menu == "📥 Upload & Processamento":
                 crc_tsks = set(df_crc_db["tsk"].dropna().astype(str).str.strip().str.upper()) if not df_crc_db.empty else set()
                 df_fmt["IS_CRC"] = df_fmt["TSK"].astype(str).str.strip().str.upper().apply(lambda x: "SIM" if x in crc_tsks else "NÃO")
 
+                # B2B Processado em Memória e com Retenção
                 df_fmt["IS_B2B"] = "NÃO" 
                 if f_b2b:
                     df_b2b_raw = load_file(f_b2b, ["B2B", "CORPORATIVO"])
@@ -579,6 +604,7 @@ elif menu == "📥 Upload & Processamento":
                     s_b2b_ne = get_single_series(df_b2b_raw, ["NE ID DO EVENTO", "NE ID", "NENAME"], "")
                     s_b2b_status = get_single_series(df_b2b_raw, ["STATUS"], "Não Acionado")
                     s_b2b_falha = get_single_series(df_b2b_raw, ["ALARME", "FALHA"], "")
+                    s_b2b_aging = get_single_series(df_b2b_raw, ["AGING"], "-")
                     s_b2b_cria = get_single_series(df_b2b_raw, ["DATA DE CRIAÇÃO", "DATA_CRIACAO", "CRIA"], "")
                     s_b2b_tec = get_single_series(df_b2b_raw, ["NOME DO TÉCNICO", "NOME TÉCNICO CAMPO", "TÉCNICO", "TECNICO"], "")
                     s_b2b_res = get_single_series(df_b2b_raw, ["RESUMO", "OBSERVAÇÕES"], "")
@@ -586,7 +612,7 @@ elif menu == "📥 Upload & Processamento":
                     s_b2b_grupo = get_single_series(df_b2b_raw, ["GRUPO ACIONADO", "GRUPO_ACIONADO", "GRUPO"], "NÃO INFORMADO")
                     
                     df_b2b_proc = pd.DataFrame({
-                        "TSK": s_b2b_tsk, "END_ID": s_b2b_end, "NE_ID": s_b2b_ne, "FALHA": s_b2b_falha, "DATA_CRIACAO": s_b2b_cria,
+                        "TSK": s_b2b_tsk, "END_ID": s_b2b_end, "NE_ID": s_b2b_ne, "FALHA": s_b2b_falha, "AGING": s_b2b_aging, "DATA_CRIACAO": s_b2b_cria,
                         "STATUS": s_b2b_status.apply(categorize_status), "RESUMO": s_b2b_res.apply(lambda r: "Em Campo" if "CAMPO" in str(r).upper() else ("Tramitado" if "TRAMITADO" in str(r).upper() else ("Encerrado" if "ENCERRADO" in str(r).upper() else str(r)))),
                         "TECNICO": s_b2b_tec, "OBS": s_b2b_obs, "GRUPO_ACIONADO": s_b2b_grupo
                     })
@@ -615,13 +641,6 @@ elif menu == "📥 Upload & Processamento":
                         b2b_tokens = set(df_b2b_cloud["TSK"].dropna().astype(str).str.strip().str.upper()).union(set(df_b2b_cloud["NE_ID"].dropna().astype(str).str.strip().str.upper()))
                         df_fmt["IS_B2B"] = df_fmt.apply(lambda r: "SIM" if str(r["TSK"]).upper() in b2b_tokens or str(r["NE_ID"]).upper() in b2b_tokens else "NÃO", axis=1)
 
-                try:
-                    with engine.connect() as conn:
-                        conn.execute(text("DROP TABLE IF EXISTS backlog_fixa_previous"))
-                        if not df_old_fixa.empty:
-                            df_old_fixa.to_sql('backlog_fixa_previous', engine, if_exists='replace', index=False)
-                except: pass
-                
                 df_fmt.to_sql('backlog_fixa', engine, if_exists='replace', index=False)
                 aneis_count = (df_fmt["ANEL_ABERTO"] == "SIM").sum()
                 
@@ -635,13 +654,14 @@ elif menu == "📥 Upload & Processamento":
                     s_ne_m = get_single_series(df_movel_raw, ["NE ID DO EVENTO", "NE ID", "NENAME"], "")
                     s_status_m = get_single_series(df_movel_raw, ["STATUS"], "Não Acionado")
                     s_falha_m = get_single_series(df_movel_raw, ["ALARME", "FALHA"], "")
+                    s_aging_m = get_single_series(df_movel_raw, ["AGING"], "-")
                     s_cria_m = get_single_series(df_movel_raw, ["DATA DE CRIAÇÃO", "DATA_CRIACAO", "CRIA"], "")
                     s_tec_m = get_single_series(df_movel_raw, ["NOME DO TÉCNICO", "NOME TÉCNICO CAMPO", "TÉCNICO", "TECNICO", "RESPONSÁVEL"], "")
                     s_resumo_m = get_single_series(df_movel_raw, ["RESUMO", "OBSERVAÇÕES"], "")
                     s_obs_m = get_single_series(df_movel_raw, ["OBS", "NOTAS"], "")
 
                     df_movel = pd.DataFrame({
-                        "TSK": s_tsk_m, "END_ID": s_end_m, "NE_ID": s_ne_m, "FALHA": s_falha_m, "DATA_CRIACAO": s_cria_m,
+                        "TSK": s_tsk_m, "END_ID": s_end_m, "NE_ID": s_ne_m, "FALHA": s_falha_m, "AGING": s_aging_m, "DATA_CRIACAO": s_cria_m,
                         "STATUS": s_status_m.apply(categorize_status), "RESUMO": s_resumo_m.apply(lambda r: "Em Campo" if "CAMPO" in str(r).upper() else ("Tramitado" if "TRAMITADO" in str(r).upper() else ("Encerrado" if "ENCERRADO" in str(r).upper() else str(r)))),
                         "TECNICO": s_tec_m, "OBS": s_obs_m
                     })
@@ -676,7 +696,7 @@ elif menu == "📂 Backlog Operacional (Fixa)":
         st.cache_data.clear()
         st.rerun()
 
-    df = load_table("backlog_fixa").copy()
+    df = load_table("backlog_fixa")
 
     if df.empty:
         st.warning("Nenhuma base Fixa encontrada na nuvem. Faça o upload na primeira aba.")
@@ -685,14 +705,12 @@ elif menu == "📂 Backlog Operacional (Fixa)":
             if c not in df.columns: df[c] = "NÃO"
         if "ORIGEM" not in df.columns: df["ORIGEM"] = "FMT"
 
-        df_bk_view = df.loc[:, ~df.columns.duplicated()].copy()
-        df_bk_view = fix_aging_view(df_bk_view)
-
         cols_backlog = ["TSK", "EVENTO", "END_ID", "NE_ID", "TEMPO_DO_CHAMADO", "AGING", "FALHA", "STATUS", "OBS", "RESUMO", "TECNICO", "DWDM", "ANEL_ABERTO", "IS_CRC", "QUADRANTE", "ORIGEM"]
         for c in cols_backlog:
-            if c not in df_bk_view.columns: df_bk_view[c] = ""
+            if c not in df.columns: df[c] = ""
 
-        # LINHA 1 DE FILTROS
+        df_bk_view = df.loc[:, ~df.columns.duplicated()].copy()
+
         r1_c1, r1_c2, r1_c3, r1_c4 = st.columns(4)
         with r1_c1:
             sel_cat = st.selectbox("Categoria (Fila/Sainte):", ["Todas", "Fila (Pendentes)", "Saintes (Concluídos)"], key="bk_cat")
@@ -705,7 +723,6 @@ elif menu == "📂 Backlog Operacional (Fixa)":
         with r1_c4:
             busca_bk = st.text_input("🔍 Busca rápida:", key="bk_busca")
 
-        # LINHA 2 DE FILTROS
         r2_c1, r2_c2, r2_c3, r2_c4 = st.columns(4)
         with r2_c1:
             sel_anel = st.selectbox("Anel Aberto:", options=["Todos", "SIM", "NÃO"], key="bk_anel")
@@ -733,7 +750,7 @@ elif menu == "📂 Backlog Operacional (Fixa)":
             "END_ID": st.column_config.TextColumn("END ID", disabled=True),
             "NE_ID": st.column_config.TextColumn("NE ID", disabled=True),
             "TEMPO_DO_CHAMADO": st.column_config.TextColumn("DOWNTIME", disabled=True),
-            "AGING": st.column_config.TextColumn("AGING (SLA)", disabled=True),
+            "AGING": st.column_config.TextColumn("AGING", disabled=True),
             "FALHA": st.column_config.TextColumn("FALHA", disabled=True),
             "STATUS": st.column_config.SelectboxColumn("Status", options=["Iniciado", "Acionado", "Encerrado", "Tramitado", "Não Acionado"], required=True),
             "OBS": st.column_config.TextColumn("Obs.:", width="large"),
@@ -786,17 +803,14 @@ elif menu == "📱 Backlog Móvel":
         st.cache_data.clear()
         st.rerun()
 
-    df_movel = load_table("backlog_movel").copy()
+    df_movel = load_table("backlog_movel")
 
     if df_movel.empty:
         st.warning("Nenhuma base Móvel encontrada na Nuvem. Faça o upload na primeira aba (Opção 3).")
     else:
         if "QUADRANTE" not in df_movel.columns: df_movel["QUADRANTE"] = "NÃO INFORMADO"
         
-        df_movel_view = df_movel.loc[:, ~df_movel.columns.duplicated()].copy()
-        df_movel_view = fix_aging_view(df_movel_view)
-
-        stats_movel = get_status_counts(df_movel_view, status_col="STATUS")
+        stats_movel = get_status_counts(df_movel, status_col="STATUS")
         m1, m2, m3, m4, m5 = st.columns(5)
         m1.metric("Total Móvel", stats_movel["Total"])
         m2.metric("Acionados", stats_movel["Acionado"])
@@ -808,7 +822,9 @@ elif menu == "📱 Backlog Móvel":
 
         cols_movel = ["TSK", "END_ID", "QUADRANTE", "NE_ID", "TEMPO_DO_CHAMADO", "AGING", "FALHA", "STATUS", "OBS", "RESUMO", "TECNICO"]
         for c in cols_movel:
-            if c not in df_movel_view.columns: df_movel_view[c] = ""
+            if c not in df_movel.columns: df_movel[c] = ""
+
+        df_movel_view = df_movel.loc[:, ~df_movel.columns.duplicated()].copy()
 
         c_m1, c_m2, c_m3, c_m4 = st.columns(4)
         with c_m1:
@@ -837,7 +853,7 @@ elif menu == "📱 Backlog Móvel":
             "QUADRANTE": st.column_config.TextColumn("QDRs", disabled=True),
             "NE_ID": st.column_config.TextColumn("NE ID", disabled=True),
             "TEMPO_DO_CHAMADO": st.column_config.TextColumn("Tempo Chamado", disabled=True),
-            "AGING": st.column_config.TextColumn("AGING (SLA)", disabled=True),
+            "AGING": st.column_config.TextColumn("Aging", disabled=True),
             "FALHA": st.column_config.TextColumn("Falha", disabled=True),
             "STATUS": st.column_config.SelectboxColumn("Status", options=["Iniciado", "Acionado", "Encerrado", "Tramitado", "Não Acionado"], required=True),
             "RESUMO": st.column_config.SelectboxColumn("Resumo", options=["Em Campo", "Tramitado", "Encerrado", "Em Análise", "Acionado", "Outros"]),
@@ -881,11 +897,8 @@ elif menu == "🔄 Handover (Entrantes/Saintes)":
     st.title("🔄 Handover Operacional")
     st.caption("Acompanhe o que entrou de novo e o que saiu do seu backlog da Fixa desde a última atualização da base.")
 
-    df_new = load_table("backlog_fixa").copy()
-    df_old = load_table("backlog_fixa_previous").copy()
-    
-    if not df_new.empty: df_new = fix_aging_view(df_new)
-    if not df_old.empty: df_old = fix_aging_view(df_old)
+    df_new = load_table("backlog_fixa")
+    df_old = load_table("backlog_fixa_previous")
 
     if df_new.empty or df_old.empty:
         st.info("⚠️ O sistema precisa de pelo menos dois uploads de planilha para comparar o antes e o depois.")
@@ -945,7 +958,7 @@ elif menu == "🔄 Handover (Entrantes/Saintes)":
         with t2:
             st.subheader(f"🔴 Chamados Saintes ({len(df_saintes)})")
             if not df_saintes.empty:
-                cols_show = ["TSK", "END_ID", "NE_ID", "QUADRANTE", "FALHA", "STATUS", "TECNICO", "OBS", "AGING"]
+                cols_show = ["TSK", "END_ID", "NE_ID", "QUADRANTE", "FALHA", "STATUS", "TECNICO", "OBS"]
                 cols_show = [c for c in cols_show if c in df_saintes.columns]
                 st.dataframe(apply_colors(df_saintes[cols_show]), use_container_width=True)
             else:
@@ -962,7 +975,7 @@ elif menu == "💼 Gestão B2B":
         st.cache_data.clear()
         st.rerun()
         
-    df_b2b = load_table("backlog_b2b").copy()
+    df_b2b = load_table("backlog_b2b")
 
     if df_b2b.empty:
         st.warning("Nenhuma base B2B carregada na nuvem. Envie o arquivo B2B na primeira aba.")
@@ -970,10 +983,7 @@ elif menu == "💼 Gestão B2B":
         if "QUADRANTE" not in df_b2b.columns: df_b2b["QUADRANTE"] = "NÃO INFORMADO"
         if "GRUPO_ACIONADO" not in df_b2b.columns: df_b2b["GRUPO_ACIONADO"] = "NÃO INFORMADO"
 
-        df_b2b_view = df_b2b.loc[:, ~df_b2b.columns.duplicated()].copy()
-        df_b2b_view = fix_aging_view(df_b2b_view)
-
-        stats_b2b = get_status_counts(df_b2b_view, status_col="STATUS")
+        stats_b2b = get_status_counts(df_b2b, status_col="STATUS")
         m1, m2, m3, m4, m5 = st.columns(5)
         m1.metric("Total B2B", stats_b2b["Total"])
         m2.metric("Acionados", stats_b2b["Acionado"])
@@ -985,7 +995,9 @@ elif menu == "💼 Gestão B2B":
 
         cols_b2b = ["TSK", "TEMPO_DO_CHAMADO", "QUADRANTE", "GRUPO_ACIONADO", "NE_ID", "END_ID", "FALHA", "STATUS", "RESUMO", "TECNICO", "OBS", "AGING"]
         for c in cols_b2b:
-            if c not in df_b2b_view.columns: df_b2b_view[c] = ""
+            if c not in df_b2b.columns: df_b2b[c] = ""
+
+        df_b2b_view = df_b2b.loc[:, ~df_b2b.columns.duplicated()].copy()
 
         c_b1, c_b2, c_b3, c_b4 = st.columns(4)
         with c_b1:
@@ -1038,7 +1050,7 @@ elif menu == "💼 Gestão B2B":
             "RESUMO": st.column_config.SelectboxColumn("Resumo", options=["Em Campo", "Tramitado", "Encerrado", "Em Análise", "Acionado", "Outros"]),
             "TECNICO": st.column_config.TextColumn("Técnico Responsável"),
             "OBS": st.column_config.TextColumn("Observações / Trâmites", width="large"),
-            "AGING": st.column_config.TextColumn("AGING (SLA)", disabled=True),
+            "AGING": st.column_config.TextColumn("Aging", disabled=True),
         }
 
         edited_b2b = st.data_editor(apply_colors(df_b2b_view[cols_b2b]), column_config=column_config_b2b, use_container_width=True, height=500, key="b2b_editor_unique")
@@ -1077,15 +1089,13 @@ elif menu == "📺 Apresentação Executiva":
     st.title("📺 Apresentação Executiva - Painel NOC FMT")
     st.markdown("Visão consolidada do Backbone para report gerencial e tomada de decisão rápida.")
     
-    df = load_table("backlog_fixa").copy()
-    df_old = load_table("backlog_fixa_previous").copy()
-    df_hist = load_table("historico_diario").copy()
+    df = load_table("backlog_fixa")
+    df_old = load_table("backlog_fixa_previous")
+    df_hist = load_table("historico_diario")
 
     if df.empty:
         st.warning("Nenhuma base Fixa carregada na nuvem.")
     else:
-        df = fix_aging_view(df)
-        
         for c in ["DWDM", "ANEL_ABERTO", "IS_B2B", "IS_CRC", "QUADRANTE"]:
             if c not in df.columns: df[c] = "NÃO"
 
@@ -1144,7 +1154,6 @@ elif menu == "📺 Apresentação Executiva":
                 st.markdown(f"<h3 style='color: {color_theme};'>{emoji} {title}</h3>", unsafe_allow_html=True)
                 stats = get_status_counts(sub_df, status_col="STATUS")
                 
-                # LINHA DE MÉTRICAS
                 if extra_metrics is not None:
                     cm1, cm2, cm3 = st.columns(3)
                     cm1.metric("🌅 Começou no Dia", extra_metrics.get("iniciou_dia", 0))
@@ -1155,7 +1164,6 @@ elif menu == "📺 Apresentação Executiva":
                     
                 st.write("---")
 
-                # LATERAL: STATUS (TEXTO) | GRÁFICO STATUS | GRÁFICO QUADRANTE
                 c_metrics, c_chart1, c_chart2 = st.columns([1.2, 1.5, 1.5])
                 
                 with c_metrics:
@@ -1196,9 +1204,9 @@ elif menu == "📺 Apresentação Executiva":
                         st.caption("Sem dados.")
 
                 st.write("---")
-                # FILTRO INTERATIVO PARA A TABELA
-                st.markdown("**🔍 Detalhamento (Selecione o Status para filtrar a tabela abaixo):**")
-                sel_tab = st.radio("Filtro de Status:", ["Todos", "Acionado", "Iniciado", "Tramitado", "Encerrado"], horizontal=True, label_visibility="collapsed", key=f"rad_{title}")
+                # BOTOES DE FILTRO INTERATIVO PARA A TABELA (EFEITO DASHBOARD)
+                st.markdown(f"**🔍 Detalhamento (Selecione o Status para filtrar):**")
+                sel_tab = st.radio("Filtro:", ["Todos", "Acionado", "Iniciado", "Tramitado", "Encerrado"], horizontal=True, label_visibility="collapsed", key=f"rad_{title}")
                 
                 df_show = sub_df.copy()
                 if sel_tab != "Todos":
@@ -1216,7 +1224,6 @@ elif menu == "📺 Apresentação Executiva":
         # 1. Anéis Abertos
         df_aneis = df_view[df_view["ANEL_ABERTO"] == "SIM"]
         
-        # Logica para Anéis - Início do Dia x Agora
         if not df_hist.empty:
             last_snap_date = df_hist["data_snapshot"].max()
             df_start_day = df_hist[df_hist["data_snapshot"] == last_snap_date]
@@ -1294,7 +1301,7 @@ elif menu == "🚨 Casos Críticos":
         "Previsão e Nivel Escalonado": st.column_config.TextColumn("Previsão e Nivel Escalonado", width="large"),
     }
 
-    edited_crit = st.data_editor(df_crit, num_rows="dynamic", column_config=config, use_container_width=True)
+    edited_crit = st.data_editor(apply_colors(df_crit), num_rows="dynamic", column_config=config, use_container_width=True)
 
     if st.button("💾 Salvar Casos Críticos", type="primary"):
         edited_crit.to_sql("casos_criticos", engine, if_exists="replace", index=False)
@@ -1334,12 +1341,11 @@ elif menu == "🚨 Casos Críticos":
 # ==========================================
 elif menu == "📋 Base Geral FMT":
     st.title("📋 Base Geral de Equipamentos FMT")
-    df = load_table("backlog_fixa").copy()
+    df = load_table("backlog_fixa")
 
     if df.empty:
         st.info("Nenhuma base carregada na nuvem.")
     else:
-        df = fix_aging_view(df)
         col_f1, col_f2, col_f3 = st.columns(3)
         with col_f1:
             if "QUADRANTE" in df.columns:
@@ -1412,7 +1418,7 @@ elif menu == "🗄️ Histórico CRC":
         }
 
         edited_crc = st.data_editor(
-            df_crc_view[["tsk", "ne_id", "end_id", "status", "aging", "descricao", "data_atualizacao"]], 
+            apply_colors(df_crc_view[["tsk", "ne_id", "end_id", "status", "aging", "descricao", "data_atualizacao"]]), 
             column_config=col_cfg_crc, 
             use_container_width=True, 
             height=500, 
@@ -1453,11 +1459,10 @@ elif menu == "📅 Histórico Diário (Dias)":
     st.title("📅 Histórico Diário (Snapshots)")
     st.caption("Arquivos de fechamento salvos automaticamente na virada do dia (00:00).")
     
-    df_hist = load_table("historico_diario").copy()
+    df_hist = load_table("historico_diario")
     if df_hist.empty:
         st.info("Nenhum histórico diário gerado ainda. O sistema salvará o primeiro hoje à meia-noite.")
     else:
-        df_hist = fix_aging_view(df_hist)
         dias_disponiveis = sorted(df_hist["data_snapshot"].unique(), reverse=True)
         selected_dia = st.selectbox("Selecione o Dia para visualizar e baixar:", options=dias_disponiveis)
         
