@@ -5,10 +5,11 @@ import bcrypt
 import re
 import io
 import os
+import altair as alt
 from datetime import datetime
 
 # ==========================================
-# 1. CONFIGURAÇÃO DA PÁGINA E VARIÁVEIS E CSS
+# 1. CONFIGURAÇÃO DA PÁGINA E CSS
 # ==========================================
 st.set_page_config(
     page_title="NOC FMT - Command Center",
@@ -17,11 +18,11 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Injeção de CSS para o efeito de "Piscar" (Blinker) nos chamados > 10 dias
+# CSS para a Animação do Vermelho Piscando (Blinker)
 st.markdown("""
     <style>
     @keyframes blinker {
-        50% { opacity: 0.4; }
+        50% { opacity: 0.3; }
     }
     </style>
 """, unsafe_allow_html=True)
@@ -34,7 +35,7 @@ if 'is_admin' not in st.session_state:
     st.session_state['is_admin'] = False
 
 # ==========================================
-# 2. CONEXÃO COM O BANCO EM NUVEM OU LOCAL E ROTINAS
+# 2. CONEXÃO COM O BANCO EM NUVEM E ROTINAS
 # ==========================================
 DB_URL = os.environ.get("DB_URL")
 
@@ -83,7 +84,6 @@ def init_cloud_db():
 
 init_cloud_db()
 
-# ROTINA AUTOMÁTICA DE MEIA-NOITE (SNAPSHOP DIÁRIO E ZERAR BASES)
 def run_daily_snapshot():
     today_str = datetime.now().strftime("%Y-%m-%d")
     with engine.connect() as conn:
@@ -136,7 +136,7 @@ def drop_table(table_name):
         return False
 
 # ==========================================
-# 3. SISTEMA DE AUTENTICAÇÃO E LOGIN
+# 3. AUTENTICAÇÃO E MOTOR DE CORES
 # ==========================================
 def verify_login(username, password):
     admin_user = os.environ.get("ADMIN_USER")
@@ -160,6 +160,43 @@ def verify_login(username, password):
             if bcrypt.checkpw(password.encode('utf-8'), stored_hash):
                 return True, False
     return False, False
+
+def apply_colors(df):
+    """Aplica o motor de cores estritamente na coluna AGING, removendo a formatação de Status."""
+    def style_aging(val):
+        s = str(val).strip().lower()
+        if not s or s in ['nan', 'none', '-']: return ''
+        
+        days = 0.0
+        m1 = re.search(r'(\d+)\s*d', s)
+        if m1:
+            days = float(m1.group(1))
+        else:
+            m2 = re.search(r'(\d+([.,]\d+)?)', s)
+            if m2:
+                days = float(m2.group(1).replace(',', '.'))
+        
+        # Escala de cores do Aging baseada na regra SLA
+        if days >= 10:
+            return 'background-color: #DC2626; color: white; font-weight: bold; animation: blinker 1.2s linear infinite;'
+        elif days >= 5:
+            return 'background-color: #EF4444; color: white; font-weight: bold;'
+        elif days >= 4:
+            return 'background-color: #F97316; color: white; font-weight: bold;'
+        elif days >= 3:
+            return 'background-color: #1E3A8A; color: white; font-weight: bold;'
+        elif days >= 1:
+            return 'background-color: #BAE6FD; color: #0369A1; font-weight: bold;'
+        return ''
+
+    try:
+        styler = df.style
+        for col in ['AGING', 'aging']:
+            if col in df.columns:
+                styler = styler.map(style_aging, subset=[col]) if hasattr(styler, 'map') else styler.applymap(style_aging, subset=[col])
+        return styler
+    except:
+        return df
 
 if not st.session_state['logged_in']:
     st.markdown("<h1 style='text-align: center; color: #1E3A8A;'>📡 NOC FMT Login</h1>", unsafe_allow_html=True)
@@ -249,11 +286,8 @@ def load_file(file, target_sheet_hints=None):
     if file.name.endswith(".csv"):
         content = file.getvalue().decode('utf-8', errors='ignore')
         lines = content.splitlines()
-        
-        # Elimina metadados/lixos do Grafana
         clean_lines = [l for l in lines if "sep=" not in l.lower()[:10]]
         clean_content = "\n".join(clean_lines)
-        
         try:
             df = pd.read_csv(io.StringIO(clean_content), sep=',')
             if len(df.columns) <= 1:
@@ -261,7 +295,6 @@ def load_file(file, target_sheet_hints=None):
         except:
             try: df = pd.read_csv(io.StringIO(clean_content), sep=';', on_bad_lines='skip')
             except: df = pd.DataFrame()
-        
         return df.drop_duplicates()
     else:
         xls = pd.ExcelFile(file)
@@ -272,7 +305,6 @@ def load_file(file, target_sheet_hints=None):
                     sheet_to_load = s
                     break
         df = pd.read_excel(xls, sheet_name=sheet_to_load)
-        
         if len(df) > 0 and any(str(c).startswith("Unnamed") for c in df.columns[:3]):
             for idx in range(min(15, len(df))):
                 row_vals = [str(x).upper() for x in df.iloc[idx].values]
@@ -280,7 +312,6 @@ def load_file(file, target_sheet_hints=None):
                     df.columns = df.iloc[idx]
                     df = df.iloc[idx+1:].reset_index(drop=True)
                     break
-                    
         return df.drop_duplicates()
 
 def get_single_series(df, col_name_hints, fallback_val=""):
@@ -335,52 +366,6 @@ def calculate_tempo_chamado(row):
         except: pass
     ag_val = str(row.get("AGING", "")).strip()
     return ag_val if ag_val and ag_val not in ["nan", "None"] else "0d 00h"
-
-def apply_colors(df):
-    """Aplica o motor de cores inteligente (STATUS e AGING) em qualquer DataFrame."""
-    def style_status(val):
-        v = str(val).strip().upper()
-        if v == 'ACIONADO': return 'background-color: #F8D7DA; color: #842029; font-weight: bold;'
-        elif v == 'INICIADO': return 'background-color: #D1E7DD; color: #065F46; font-weight: bold;'
-        elif v == 'TRAMITADO': return 'background-color: #CFE2FF; color: #084298; font-weight: bold;'
-        elif v == 'ENCERRADO': return 'background-color: #E2E3E5; color: #41464B; font-weight: bold;'
-        elif v in ['NÃO ACIONADO', 'NAO ACIONADO']: return 'background-color: #FFF3CD; color: #664D03; font-weight: bold;'
-        return ''
-        
-    def style_aging(val):
-        s = str(val).strip().lower()
-        if not s or s in ['nan', 'none', '-']: return ''
-        
-        days = 0.0
-        m1 = re.search(r'(\d+)\s*d', s)
-        if m1:
-            days = float(m1.group(1))
-        else:
-            m2 = re.search(r'(\d+([.,]\d+)?)', s)
-            if m2:
-                days = float(m2.group(1).replace(',', '.'))
-        
-        if days >= 10:
-            return 'background-color: #DC2626; color: white; font-weight: bold; animation: blinker 1s linear infinite;'
-        elif days >= 5:
-            return 'background-color: #EF4444; color: white; font-weight: bold;'
-        elif days >= 3:
-            return 'background-color: #F97316; color: white; font-weight: bold;'
-        elif days >= 1:
-            return 'background-color: #E0F2FE; color: #0369A1; font-weight: bold;'
-        return ''
-
-    try:
-        styler = df.style
-        for col in ['STATUS', 'status', 'Status atual']:
-            if col in df.columns:
-                styler = styler.map(style_status, subset=[col]) if hasattr(styler, 'map') else styler.applymap(style_status, subset=[col])
-        for col in ['AGING', 'aging']:
-            if col in df.columns:
-                styler = styler.map(style_aging, subset=[col]) if hasattr(styler, 'map') else styler.applymap(style_aging, subset=[col])
-        return styler
-    except:
-        return df
 
 # ==========================================
 # 6. MENUS DA BARRA LATERAL
@@ -720,7 +705,6 @@ elif menu == "📂 Backlog Operacional (Fixa)":
 
         df_bk_view = df.loc[:, ~df.columns.duplicated()].copy()
 
-        # LINHA 1 DE FILTROS
         r1_c1, r1_c2, r1_c3, r1_c4 = st.columns(4)
         with r1_c1:
             sel_cat = st.selectbox("Categoria (Fila/Sainte):", ["Todas", "Fila (Pendentes)", "Saintes (Concluídos)"], key="bk_cat")
@@ -733,7 +717,6 @@ elif menu == "📂 Backlog Operacional (Fixa)":
         with r1_c4:
             busca_bk = st.text_input("🔍 Busca rápida:", key="bk_busca")
 
-        # LINHA 2 DE FILTROS
         r2_c1, r2_c2, r2_c3, r2_c4 = st.columns(4)
         with r2_c1:
             sel_anel = st.selectbox("Anel Aberto:", options=["Todos", "SIM", "NÃO"], key="bk_anel")
@@ -969,7 +952,7 @@ elif menu == "🔄 Handover (Entrantes/Saintes)":
         with t2:
             st.subheader(f"🔴 Chamados Saintes ({len(df_saintes)})")
             if not df_saintes.empty:
-                cols_show = ["TSK", "END_ID", "NE_ID", "QUADRANTE", "FALHA", "STATUS", "TECNICO", "OBS"]
+                cols_show = ["TSK", "END_ID", "NE_ID", "QUADRANTE", "FALHA", "STATUS", "TECNICO", "OBS", "AGING"]
                 cols_show = [c for c in cols_show if c in df_saintes.columns]
                 st.dataframe(apply_colors(df_saintes[cols_show]), use_container_width=True)
             else:
@@ -1144,9 +1127,15 @@ elif menu == "📺 Apresentação Executiva":
 
         st.markdown("### 📍 Visão Geográfica Global (Top 10 Quadrantes Impactados)")
         if "QUADRANTE" in df_view.columns and not df_view.empty:
-            quad_counts = df_view[df_view["QUADRANTE"] != "NÃO INFORMADO"]["QUADRANTE"].value_counts().head(10)
+            quad_counts = df_view[df_view["QUADRANTE"] != "NÃO INFORMADO"]["QUADRANTE"].value_counts().head(10).reset_index()
+            quad_counts.columns = ["Quadrante", "Qtde"]
             if not quad_counts.empty:
-                st.bar_chart(quad_counts, color="#F59E0B", horizontal=True)
+                chart_global = alt.Chart(quad_counts).mark_bar(color="#F59E0B").encode(
+                    y=alt.Y('Quadrante:N', sort='-x', title=""),
+                    x=alt.X('Qtde:Q', title=""),
+                    tooltip=['Quadrante', 'Qtde']
+                ).properties(height=250)
+                st.altair_chart(chart_global, use_container_width=True)
             else:
                 st.info("Nenhum quadrante mapeado para os chamados nesta faixa de Aging.")
         else:
@@ -1159,6 +1148,7 @@ elif menu == "📺 Apresentação Executiva":
                 st.markdown(f"<h3 style='color: {color_theme};'>{emoji} {title}</h3>", unsafe_allow_html=True)
                 stats = get_status_counts(sub_df, status_col="STATUS")
                 
+                # LINHA DE MÉTRICAS
                 if extra_metrics is not None:
                     cm1, cm2, cm3 = st.columns(3)
                     cm1.metric("🌅 Começou no Dia", extra_metrics.get("iniciou_dia", 0))
@@ -1169,6 +1159,7 @@ elif menu == "📺 Apresentação Executiva":
                     
                 st.write("---")
 
+                # LATERAL: STATUS (TEXTO) | GRÁFICO STATUS | GRÁFICO QUADRANTE
                 c_metrics, c_chart1, c_chart2 = st.columns([1.2, 1.5, 1.5])
                 
                 with c_metrics:
@@ -1183,44 +1174,46 @@ elif menu == "📺 Apresentação Executiva":
                     status_df = pd.DataFrame({
                         "Status": ["Acionados", "Iniciados", "Tram.", "Encerr."],
                         "Qtde": [stats["Acionado"], stats["Iniciado"], stats["Tramitado"], stats["Encerrado"]]
-                    }).set_index("Status")
-                    st.bar_chart(status_df, height=180, color=color_theme, use_container_width=True, horizontal=True)
+                    })
+                    chart_st = alt.Chart(status_df).mark_bar(color=color_theme).encode(
+                        y=alt.Y('Status:N', sort=['Acionados', 'Iniciados', 'Tram.', 'Encerr.'], title=""),
+                        x=alt.X('Qtde:Q', title=""),
+                        tooltip=['Status', 'Qtde']
+                    ).properties(height=180)
+                    st.altair_chart(chart_st, use_container_width=True)
                     
                 with c_chart2:
                     st.markdown("**Top 5 Quadrantes:**")
                     if "QUADRANTE" in sub_df.columns:
-                        quad_counts_card = sub_df[sub_df["QUADRANTE"] != "NÃO INFORMADO"]["QUADRANTE"].value_counts().head(5)
+                        quad_counts_card = sub_df[sub_df["QUADRANTE"] != "NÃO INFORMADO"]["QUADRANTE"].value_counts().head(5).reset_index()
+                        quad_counts_card.columns = ["Quadrante", "Qtde"]
                         if not quad_counts_card.empty:
-                            st.bar_chart(quad_counts_card, height=180, color="#F59E0B", use_container_width=True, horizontal=True)
+                            chart_qd = alt.Chart(quad_counts_card).mark_bar(color="#F59E0B").encode(
+                                y=alt.Y('Quadrante:N', sort='-x', title=""),
+                                x=alt.X('Qtde:Q', title=""),
+                                tooltip=['Quadrante', 'Qtde']
+                            ).properties(height=180)
+                            st.altair_chart(chart_qd, use_container_width=True)
                         else:
-                            st.caption("Sem dados de quadrante.")
+                            st.caption("Sem dados.")
                     else:
-                        st.caption("Sem dados de quadrante.")
+                        st.caption("Sem dados.")
 
-                st.markdown("**🔍 Detalhamento por Status (Clique nas Abas Abaixo):**")
-                t1, t2, t3, t4, t5 = st.tabs(["🔴 Acionados", "🟡 Iniciados", "🔵 Tramitados", "🟢 Encerrados", "📋 Ver Todos"])
+                st.write("---")
+                # FILTRO INTERATIVO PARA A TABELA (SUBSTITUI O CLIQUE NO GRÁFICO NATIVAMENTE)
+                st.markdown("**🔍 Detalhamento (Selecione o Status para filtrar a tabela abaixo):**")
+                sel_tab = st.radio("Filtro de Status:", ["Todos", "Acionado", "Iniciado", "Tramitado", "Encerrado"], horizontal=True, label_visibility="collapsed", key=f"rad_{title}")
                 
-                cols_show = [c for c in ["TSK", "TEMPO_DO_CHAMADO", "ANEL_ABERTO", "DWDM", "NE_ID", "QUADRANTE", "STATUS", "RESUMO", "TECNICO", "AGING"] if c in sub_df.columns]
+                df_show = sub_df.copy()
+                if sel_tab != "Todos":
+                    df_show = df_show[df_show["STATUS"] == sel_tab]
+                    
+                cols_show = [c for c in ["TSK", "TEMPO_DO_CHAMADO", "ANEL_ABERTO", "DWDM", "NE_ID", "QUADRANTE", "STATUS", "RESUMO", "TECNICO", "AGING"] if c in df_show.columns]
                 
-                with t1:
-                    df_acionado = sub_df[sub_df["STATUS"] == "Acionado"]
-                    if not df_acionado.empty: st.dataframe(apply_colors(df_acionado[cols_show]), use_container_width=True, hide_index=True)
-                    else: st.caption("Nenhum chamado Acionado.")
-                with t2:
-                    df_ini = sub_df[sub_df["STATUS"] == "Iniciado"]
-                    if not df_ini.empty: st.dataframe(apply_colors(df_ini[cols_show]), use_container_width=True, hide_index=True)
-                    else: st.caption("Nenhum chamado Iniciado.")
-                with t3:
-                    df_tram = sub_df[sub_df["STATUS"] == "Tramitado"]
-                    if not df_tram.empty: st.dataframe(apply_colors(df_tram[cols_show]), use_container_width=True, hide_index=True)
-                    else: st.caption("Nenhum chamado Tramitado.")
-                with t4:
-                    df_enc = sub_df[sub_df["STATUS"] == "Encerrado"]
-                    if not df_enc.empty: st.dataframe(apply_colors(df_enc[cols_show]), use_container_width=True, hide_index=True)
-                    else: st.caption("Nenhum chamado Encerrado.")
-                with t5:
-                    if not sub_df.empty: st.dataframe(apply_colors(sub_df[cols_show]), use_container_width=True, hide_index=True)
-                    else: st.caption("Nenhum chamado no total.")
+                if not df_show.empty:
+                    st.dataframe(apply_colors(df_show[cols_show]), use_container_width=True, hide_index=True)
+                else:
+                    st.caption(f"Nenhum chamado '{sel_tab}' encontrado.")
 
             st.write("")
 
