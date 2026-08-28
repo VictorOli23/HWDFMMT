@@ -18,15 +18,6 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# CSS para a Animação do Vermelho Piscando (Blinker) no AGING > 10 dias
-st.markdown("""
-    <style>
-    @keyframes blinker {
-        50% { opacity: 0.3; }
-    }
-    </style>
-""", unsafe_allow_html=True)
-
 if 'logged_in' not in st.session_state:
     st.session_state['logged_in'] = False
 if 'username' not in st.session_state:
@@ -136,7 +127,7 @@ def drop_table(table_name):
         return False
 
 # ==========================================
-# 3. AUTENTICAÇÃO E MOTOR DE CORES (PYTHON)
+# 3. AUTENTICAÇÃO E MOTOR DE CORES DO SLA
 # ==========================================
 def verify_login(username, password):
     admin_user = os.environ.get("ADMIN_USER")
@@ -162,23 +153,12 @@ def verify_login(username, password):
     return False, False
 
 def apply_colors(df):
-    """Aplica cores estritamente nas colunas de STATUS e AGING usando Pandas Styler."""
-    
-    # Cores para o Status
-    def style_status(val):
-        v = str(val).strip().upper()
-        if v == 'INICIADO': return 'background-color: #D1E7DD; color: #065F46; font-weight: bold;' # Verde
-        elif v == 'ACIONADO': return 'background-color: #FFF3CD; color: #856404; font-weight: bold;' # Amarelo/Laranja
-        elif v == 'TRAMITADO': return 'background-color: #CFE2FF; color: #084298; font-weight: bold;' # Azul
-        elif v == 'ENCERRADO': return 'background-color: #E2E3E5; color: #41464B; font-weight: bold;' # Cinza
-        return ''
-        
-    # Cores para o Aging (Tempo do Chamado)
+    """Aplica o motor de cores estritamente na coluna AGING, baseada na Matriz de SLA."""
     def style_aging(val):
         s = str(val).strip().lower()
         if not s or s in ['nan', 'none', '-']: return ''
         
-        days = 0.0
+        days = -1.0
         m1 = re.search(r'(\d+)\s*d', s)
         if m1:
             days = float(m1.group(1))
@@ -187,32 +167,22 @@ def apply_colors(df):
             if m2:
                 days = float(m2.group(1).replace(',', '.'))
         
-        # Escala de SLA do NOC
         if days >= 10:
-            return 'background-color: #8B0000; color: white; font-weight: bold; animation: blinker 1.2s linear infinite;'
+            return 'background-color: #8B0000; color: #FFFFFF; font-weight: bold; text-align: center;'
         elif days >= 5:
-            return 'background-color: #DC2626; color: white; font-weight: bold;'
+            return 'background-color: #DC2626; color: #FFFFFF; font-weight: bold; text-align: center;'
         elif days >= 4:
-            return 'background-color: #F97316; color: white; font-weight: bold;'
+            return 'background-color: #F97316; color: #FFFFFF; font-weight: bold; text-align: center;'
         elif days >= 3:
-            return 'background-color: #1E3A8A; color: white; font-weight: bold;'
+            return 'background-color: #1E3A8A; color: #FFFFFF; font-weight: bold; text-align: center;'
         elif days >= 1:
-            return 'background-color: #BAE6FD; color: #0369A1; font-weight: bold;'
+            return 'background-color: #BAE6FD; color: #0369A1; font-weight: bold; text-align: center;'
         return ''
 
     try:
         styler = df.style
-        
-        # Aplica regra do Status
-        for col in ['STATUS', 'status', 'Status atual']:
-            if col in df.columns:
-                styler = styler.map(style_status, subset=[col]) if hasattr(styler, 'map') else styler.applymap(style_status, subset=[col])
-                
-        # Aplica regra do Aging
-        for col in ['AGING', 'aging', 'TEMPO_DO_CHAMADO']:
-            if col in df.columns:
-                styler = styler.map(style_aging, subset=[col]) if hasattr(styler, 'map') else styler.applymap(style_aging, subset=[col])
-                
+        if 'AGING' in df.columns:
+            styler = styler.map(style_aging, subset=['AGING']) if hasattr(styler, 'map') else styler.applymap(style_aging, subset=['AGING'])
         return styler
     except:
         return df
@@ -244,7 +214,7 @@ if not st.session_state['logged_in']:
     st.stop()
 
 # ==========================================
-# 4. FUNÇÕES DE BANCO DE DADOS E LIMPEZA
+# 4. FUNÇÕES DE BANCO DE DADOS E CÁLCULOS
 # ==========================================
 def upsert_quadrantes(df_quad):
     col_end = next((c for c in df_quad.columns if "END" in str(c).upper()), df_quad.columns[0])
@@ -385,6 +355,28 @@ def calculate_tempo_chamado(row):
         except: pass
     ag_val = str(row.get("AGING", "")).strip()
     return ag_val if ag_val and ag_val not in ["nan", "None"] else "0d 00h"
+
+def calculate_aging_days(row):
+    """Calcula a quantidade de dias crua e preenche a coluna AGING com precisão para colorir depois"""
+    data_cria = row.get("DATA_CRIACAO", None)
+    if pd.notnull(data_cria) and str(data_cria).strip() not in ["", "nan", "None", "-"]:
+        try:
+            dt = pd.to_datetime(data_cria, dayfirst=True)
+            diff = datetime.now() - dt
+            return f"{diff.days}"
+        except: pass
+        
+    tempo = str(row.get("TEMPO_DO_CHAMADO", "")).strip()
+    m = re.search(r'(\d+)\s*d', tempo)
+    if m: return m.group(1)
+    
+    ag = str(row.get("AGING", "")).strip()
+    if ag and ag not in ["nan", "None", "-"]:
+        m = re.search(r'(\d+)', ag)
+        if m: return m.group(1)
+        return ag
+    
+    return "0"
 
 # ==========================================
 # 6. MENUS DA BARRA LATERAL
@@ -568,6 +560,7 @@ elif menu == "📥 Upload & Processamento":
                 df_fmt["QUADRANTE"] = df_fmt["END_ID"].astype(str).str.strip().str.upper().map(quad_map)
                 df_fmt["QUADRANTE"] = df_fmt["QUADRANTE"].fillna(df_fmt["END_ID"].astype(str).apply(lambda x: re.search(r'(QD\s*\d+|ANF\s*\d+)', str(x), re.IGNORECASE).group(0).upper() if re.search(r'(QD\s*\d+|ANF\s*\d+)', str(x), re.IGNORECASE) else "NÃO INFORMADO"))
                 df_fmt["TEMPO_DO_CHAMADO"] = df_fmt.apply(calculate_tempo_chamado, axis=1)
+                df_fmt["AGING"] = df_fmt.apply(calculate_aging_days, axis=1)
 
                 if not df_old_fixa.empty:
                     dict_st = dict(zip(df_old_fixa["TSK"], df_old_fixa["STATUS"]))
@@ -633,6 +626,7 @@ elif menu == "📥 Upload & Processamento":
                     df_b2b_proc["QUADRANTE"] = df_b2b_proc["END_ID"].astype(str).str.strip().str.upper().map(quad_map)
                     df_b2b_proc["QUADRANTE"] = df_b2b_proc["QUADRANTE"].fillna(df_b2b_proc["END_ID"].astype(str).apply(lambda x: re.search(r'(QD\s*\d+|ANF\s*\d+)', str(x), re.IGNORECASE).group(0).upper() if re.search(r'(QD\s*\d+|ANF\s*\d+)', str(x), re.IGNORECASE) else "NÃO INFORMADO"))
                     df_b2b_proc["TEMPO_DO_CHAMADO"] = df_b2b_proc.apply(calculate_tempo_chamado, axis=1)
+                    df_b2b_proc["AGING"] = df_b2b_proc.apply(calculate_aging_days, axis=1)
 
                     if not df_old_b2b.empty:
                         d_st = dict(zip(df_old_b2b["TSK"], df_old_b2b["STATUS"]))
@@ -682,6 +676,7 @@ elif menu == "📥 Upload & Processamento":
                     df_movel["QUADRANTE"] = df_movel["END_ID"].astype(str).str.strip().str.upper().map(quad_map)
                     df_movel["QUADRANTE"] = df_movel["QUADRANTE"].fillna(df_movel["END_ID"].astype(str).apply(lambda x: re.search(r'(QD\s*\d+|ANF\s*\d+)', str(x), re.IGNORECASE).group(0).upper() if re.search(r'(QD\s*\d+|ANF\s*\d+)', str(x), re.IGNORECASE) else "NÃO INFORMADO"))
                     df_movel["TEMPO_DO_CHAMADO"] = df_movel.apply(calculate_tempo_chamado, axis=1)
+                    df_movel["AGING"] = df_movel.apply(calculate_aging_days, axis=1)
 
                     if not df_old_movel.empty:
                         d_st_m = dict(zip(df_old_movel["TSK"], df_old_movel["STATUS"]))
@@ -763,7 +758,7 @@ elif menu == "📂 Backlog Operacional (Fixa)":
             "END_ID": st.column_config.TextColumn("END ID", disabled=True),
             "NE_ID": st.column_config.TextColumn("NE ID", disabled=True),
             "TEMPO_DO_CHAMADO": st.column_config.TextColumn("DOWNTIME", disabled=True),
-            "AGING": st.column_config.TextColumn("AGING", disabled=True),
+            "AGING": st.column_config.TextColumn("AGING (Dias)", disabled=True),
             "FALHA": st.column_config.TextColumn("FALHA", disabled=True),
             "STATUS": st.column_config.SelectboxColumn("Status", options=["Iniciado", "Acionado", "Encerrado", "Tramitado", "Não Acionado"], required=True),
             "OBS": st.column_config.TextColumn("Obs.:", width="large"),
@@ -1002,7 +997,7 @@ elif menu == "💼 Gestão B2B":
         m2.metric("Acionados", stats_b2b["Acionado"])
         m3.metric("Iniciados / Campo", stats_b2b["Iniciado"])
         m4.metric("Tramitados", stats_b2b["Tramitado"])
-        m5.metric("Encerrados", stats_b2b["Encerrados"])
+        m5.metric("Encerrados", stats_b2b["Encerrado"])
 
         st.divider()
 
@@ -1219,7 +1214,7 @@ elif menu == "📺 Apresentação Executiva":
                         st.caption("Sem dados.")
 
                 st.write("---")
-                # FILTRO INTERATIVO PARA A TABELA
+                # FILTRO INTERATIVO PARA A TABELA (SUBSTITUI O CLIQUE NO GRÁFICO NATIVAMENTE)
                 st.markdown("**🔍 Detalhamento (Selecione o Status para filtrar a tabela abaixo):**")
                 sel_tab = st.radio("Filtro de Status:", ["Todos", "Acionado", "Iniciado", "Tramitado", "Encerrado"], horizontal=True, label_visibility="collapsed", key=f"rad_{title}")
                 
@@ -1239,6 +1234,7 @@ elif menu == "📺 Apresentação Executiva":
         # 1. Anéis Abertos
         df_aneis = df_view[df_view["ANEL_ABERTO"] == "SIM"]
         
+        # Logica para Anéis - Início do Dia x Agora
         if not df_hist.empty:
             last_snap_date = df_hist["data_snapshot"].max()
             df_start_day = df_hist[df_hist["data_snapshot"] == last_snap_date]
