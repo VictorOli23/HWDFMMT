@@ -169,25 +169,19 @@ def apply_colors(df):
         
         # Escala de cores do Aging baseada na regra SLA do NOC
         if days >= 10:
-            # Maior de 10 dias (Vermelho Escuro Alerta Máximo para compensar falta de animação no Grid)
             return 'background-color: #8B0000; color: white; font-weight: bold;'
         elif days >= 5:
-            # 5 a 10 dias (Vermelho Padrão)
             return 'background-color: #DC2626; color: white; font-weight: bold;'
         elif days >= 4:
-            # Superior a 3 dias (Considerado a partir de 4 como Laranja)
             return 'background-color: #F97316; color: white; font-weight: bold;'
         elif days >= 3:
-            # 3 a 5 dias (Azul Escuro)
             return 'background-color: #1E3A8A; color: white; font-weight: bold;'
         elif days >= 1:
-            # 1 a 3 dias (Azul Claro)
             return 'background-color: #BAE6FD; color: #0369A1; font-weight: bold;'
         return ''
 
     try:
         styler = df.style
-        # Aplicando tanto no 'AGING' genérico quanto no 'TEMPO_DO_CHAMADO' que é a coluna mostrada
         for col in ['AGING', 'aging', 'TEMPO_DO_CHAMADO']:
             if col in df.columns:
                 styler = styler.map(style_aging, subset=[col]) if hasattr(styler, 'map') else styler.applymap(style_aging, subset=[col])
@@ -1223,15 +1217,16 @@ elif menu == "📺 Apresentação Executiva":
 
         # 1. Anéis Abertos
         df_aneis = df_view[df_view["ANEL_ABERTO"] == "SIM"]
-        
+        aneis_agora = df_aneis[~df_aneis["STATUS"].isin(["Tramitado", "Encerrado"])].shape[0]
+
+        # Logica Corrigida para Anéis - Início do Dia x Agora
         if not df_hist.empty:
             last_snap_date = df_hist["data_snapshot"].max()
             df_start_day = df_hist[df_hist["data_snapshot"] == last_snap_date]
             aneis_start = df_start_day[(df_start_day["ANEL_ABERTO"] == "SIM") & (~df_start_day["STATUS"].isin(["Tramitado", "Encerrado"]))].shape[0]
         else:
-            aneis_start = df_old[(df_old["ANEL_ABERTO"] == "SIM") & (~df_old["STATUS"].isin(["Tramitado", "Encerrado"]))].shape[0] if not df_old.empty else 0
-            
-        aneis_agora = df_aneis[~df_aneis["STATUS"].isin(["Tramitado", "Encerrado"])].shape[0]
+            # CORREÇÃO: No Dia 0 (sem histórico da meia-noite), assume o valor atual de pendentes para não gerar distorção com uploads parciais antigos.
+            aneis_start = aneis_agora
 
         render_presentation_card("Anéis Abertos (Alto Impacto)", "🚨", df_aneis, "#DC2626", extra_metrics={"iniciou_dia": aneis_start, "pendentes_agora": aneis_agora})
 
