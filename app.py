@@ -446,21 +446,21 @@ elif menu == "📥 Upload & Processamento":
     c1, c2, c3, c4 = st.columns(4)
     with c1:
         if not df_fixa_check.empty:
-            st.success(f"🟢 **Fixa:** {len(df_fixa_check)} reg."); 
+            st.success(f"🟢 **Fixa:** {len(df_fixa_check)} reg.")
             if st.button("🗑️ Limpar Fixa"): drop_table("backlog_fixa"); st.rerun()
         if not df_fmmt_check.empty:
-            st.success(f"🟢 **FMMT:** {len(df_fmmt_check)} reg."); 
+            st.success(f"🟢 **FMMT:** {len(df_fmmt_check)} reg.")
             if st.button("🗑️ Limpar FMMT"): drop_table("backlog_fmmt"); st.rerun()
     with c2:
         if not df_movel_check.empty:
-            st.success(f"🟢 **Móvel:** {len(df_movel_check)} reg."); 
+            st.success(f"🟢 **Móvel:** {len(df_movel_check)} reg.")
             if st.button("🗑️ Limpar Móvel"): drop_table("backlog_movel"); st.rerun()
         if not df_b2b_check.empty:
-            st.success(f"🟢 **B2B:** {len(df_b2b_check)} reg."); 
+            st.success(f"🟢 **B2B:** {len(df_b2b_check)} reg.")
             if st.button("🗑️ Limpar B2B"): drop_table("backlog_b2b"); st.rerun()
     with c3:
         if not df_grafana_check.empty:
-            st.success(f"🟢 **Grafana:** {len(df_grafana_check)} reg."); 
+            st.success(f"🟢 **Grafana:** {len(df_grafana_check)} reg.")
             if st.button("🗑️ Limpar Grafana"): drop_table("backlog_grafana"); st.rerun()
 
     st.markdown("---")
@@ -486,7 +486,6 @@ elif menu == "📥 Upload & Processamento":
             with st.spinner("Realizando a Fusão das bases, preservando edições e cruzando Anéis..."):
                 st.cache_data.clear() 
                 
-                # PRESERVAR BASES ANTIGAS
                 df_old_fixa = load_table("backlog_fixa")
                 df_old_movel = load_table("backlog_movel")
                 df_old_b2b = load_table("backlog_b2b")
@@ -517,9 +516,6 @@ elif menu == "📥 Upload & Processamento":
                     df_crc_raw = load_file(f_crc, ["CRC"])
                     if not df_crc_raw.empty: upsert_crc(df_crc_raw)
 
-                # ==========================================================
-                # FUSÃO: PUXA OS CHAMADOS FALTANTES DA FMMT PARA A FIXA
-                # ==========================================================
                 quad_map = get_quadrantes_map()
                 
                 df_fmt_base = pd.DataFrame(extrair_colunas(df_fmt_raw))
@@ -545,7 +541,6 @@ elif menu == "📥 Upload & Processamento":
                 df_fmt["QUADRANTE"] = df_fmt["QUADRANTE"].fillna(df_fmt["END_ID"].astype(str).apply(lambda x: re.search(r'(QD\s*\d+|ANF\s*\d+)', str(x), re.IGNORECASE).group(0).upper() if re.search(r'(QD\s*\d+|ANF\s*\d+)', str(x), re.IGNORECASE) else "NÃO INFORMADO"))
                 df_fmt["TEMPO_DO_CHAMADO"] = df_fmt.apply(calculate_tempo_chamado, axis=1)
 
-                # ROTINA DE RETENÇÃO DE DADOS (FIXA)
                 if not df_old_fixa.empty:
                     dict_st = dict(zip(df_old_fixa["TSK"], df_old_fixa["STATUS"]))
                     dict_res = dict(zip(df_old_fixa["TSK"], df_old_fixa["RESUMO"]))
@@ -556,9 +551,6 @@ elif menu == "📥 Upload & Processamento":
                     df_fmt["TECNICO"] = df_fmt.apply(lambda r: dict_tec.get(r["TSK"], r["TECNICO"]), axis=1)
                     df_fmt["OBS"] = df_fmt.apply(lambda r: dict_obs.get(r["TSK"], r["OBS"]), axis=1)
 
-                # ==========================================================
-                # OMNI-SEARCH EXCLUSIVO CONTRA GRAFANA
-                # ==========================================================
                 global_names = set()
                 global_events = set()
                 
@@ -589,7 +581,6 @@ elif menu == "📥 Upload & Processamento":
                 crc_tsks = set(df_crc_db["tsk"].dropna().astype(str).str.strip().str.upper()) if not df_crc_db.empty else set()
                 df_fmt["IS_CRC"] = df_fmt["TSK"].astype(str).str.strip().str.upper().apply(lambda x: "SIM" if x in crc_tsks else "NÃO")
 
-                # B2B Processado em Memória e com Retenção
                 df_fmt["IS_B2B"] = "NÃO" 
                 if f_b2b:
                     df_b2b_raw = load_file(f_b2b, ["B2B", "CORPORATIVO"])
@@ -640,7 +631,6 @@ elif menu == "📥 Upload & Processamento":
                 
                 st.success(f"✅ Fusão e Retenção Concluídas! Suas edições foram salvas e mescladas.\nAnéis Abertos encontrados: {aneis_count}")
 
-                # 3. BASE MÓVEL BACKLOG
                 if f_movel_backlog:
                     df_movel_raw = load_file(f_movel_backlog, ["MOVEL", "MOBILE", "BACKLOG"])
                     s_tsk_m = get_single_series(df_movel_raw, ["NÚMERO", "NUMERO", "TSK", "CHAMADO", "ORDEM"], "")
@@ -732,7 +722,7 @@ elif menu == "📂 Backlog Operacional (Fixa)":
             df_bk_view = df_bk_view[df_bk_view["STATUS"].isin(["Tramitado", "Encerrado"])]
 
         if sel_st != "Todos": df_bk_view = df_bk_view[df_bk_view["STATUS"] == sel_st]
-        if sel_origem != "Todos": df_bk_view = df_bk_view[df_bk_view["ORIGEM"] == sel_origem]
+        if sel_origem != "Todas": df_bk_view = df_bk_view[df_bk_view["ORIGEM"] == sel_origem]
         if sel_anel != "Todos": df_bk_view = df_bk_view[df_bk_view["ANEL_ABERTO"] == sel_anel]
         if sel_dwdm != "Todos": df_bk_view = df_bk_view[df_bk_view["DWDM"] == sel_dwdm]
         if sel_quad != "Todos": df_bk_view = df_bk_view[df_bk_view["QUADRANTE"] == sel_quad]
@@ -1146,7 +1136,6 @@ elif menu == "📺 Apresentação Executiva":
         def render_presentation_card(title, emoji, sub_df, color_theme):
             with st.container(border=True):
                 st.markdown(f"<h3 style='color: {color_theme};'>{emoji} {title}</h3>", unsafe_allow_html=True)
-                
                 stats = get_status_counts(sub_df, status_col="STATUS")
                 
                 # Para Tratativa: Tudo que NÃO está Encerrado nem Tramitado
@@ -1198,7 +1187,6 @@ elif menu == "📺 Apresentação Executiva":
                         st.caption("Sem dados.")
 
                 st.write("---")
-                # BOTOES DE FILTRO INTERATIVO PARA A TABELA (EFEITO DASHBOARD)
                 st.markdown(f"**🔍 Detalhamento (Selecione o Status para filtrar):**")
                 sel_tab = st.radio("Filtro:", ["Todos", "Acionado", "Iniciado", "Tramitado", "Encerrado"], horizontal=True, label_visibility="collapsed", key=f"rad_{title}")
                 
