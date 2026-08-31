@@ -732,7 +732,7 @@ elif menu == "📂 Backlog Operacional (Fixa)":
             df_bk_view = df_bk_view[df_bk_view["STATUS"].isin(["Tramitado", "Encerrado"])]
 
         if sel_st != "Todos": df_bk_view = df_bk_view[df_bk_view["STATUS"] == sel_st]
-        if sel_origem != "Todas": df_bk_view = df_bk_view[df_bk_view["ORIGEM"] == sel_origem]
+        if sel_origem != "Todos": df_bk_view = df_bk_view[df_bk_view["ORIGEM"] == sel_origem]
         if sel_anel != "Todos": df_bk_view = df_bk_view[df_bk_view["ANEL_ABERTO"] == sel_anel]
         if sel_dwdm != "Todos": df_bk_view = df_bk_view[df_bk_view["DWDM"] == sel_dwdm]
         if sel_quad != "Todos": df_bk_view = df_bk_view[df_bk_view["QUADRANTE"] == sel_quad]
@@ -1143,18 +1143,18 @@ elif menu == "📺 Apresentação Executiva":
             
         st.divider()
 
-        def render_presentation_card(title, emoji, sub_df, color_theme, extra_metrics=None):
+        def render_presentation_card(title, emoji, sub_df, color_theme):
             with st.container(border=True):
                 st.markdown(f"<h3 style='color: {color_theme};'>{emoji} {title}</h3>", unsafe_allow_html=True)
+                
                 stats = get_status_counts(sub_df, status_col="STATUS")
                 
-                if extra_metrics is not None:
-                    cm1, cm2, cm3 = st.columns(3)
-                    cm1.metric("🌅 Começou no Dia", extra_metrics.get("iniciou_dia", 0))
-                    cm2.metric("🔥 Agora para Tratativa", extra_metrics.get("pendentes_agora", 0))
-                    cm3.metric("Total Atual na Fila", stats["Total"])
-                else:
-                    st.metric("Total na Fila", stats["Total"])
+                # Para Tratativa: Tudo que NÃO está Encerrado nem Tramitado
+                pendentes = sub_df[~sub_df["STATUS"].isin(["Tramitado", "Encerrado"])].shape[0]
+                
+                cm1, cm2 = st.columns(2)
+                cm1.metric("🔥 Agora para Tratativa", pendentes)
+                cm2.metric("📊 Total Geral (Upado)", stats["Total"])
                     
                 st.write("---")
 
@@ -1217,18 +1217,7 @@ elif menu == "📺 Apresentação Executiva":
 
         # 1. Anéis Abertos
         df_aneis = df_view[df_view["ANEL_ABERTO"] == "SIM"]
-        aneis_agora = df_aneis[~df_aneis["STATUS"].isin(["Tramitado", "Encerrado"])].shape[0]
-
-        # Logica Corrigida para Anéis - Início do Dia x Agora
-        if not df_hist.empty:
-            last_snap_date = df_hist["data_snapshot"].max()
-            df_start_day = df_hist[df_hist["data_snapshot"] == last_snap_date]
-            aneis_start = df_start_day[(df_start_day["ANEL_ABERTO"] == "SIM") & (~df_start_day["STATUS"].isin(["Tramitado", "Encerrado"]))].shape[0]
-        else:
-            # CORREÇÃO: No Dia 0 (sem histórico da meia-noite), assume o valor atual de pendentes para não gerar distorção com uploads parciais antigos.
-            aneis_start = aneis_agora
-
-        render_presentation_card("Anéis Abertos (Alto Impacto)", "🚨", df_aneis, "#DC2626", extra_metrics={"iniciou_dia": aneis_start, "pendentes_agora": aneis_agora})
+        render_presentation_card("Anéis Abertos (Alto Impacto)", "🚨", df_aneis, "#DC2626")
 
         # 2. DWDM
         df_dwdm = df_view[df_view["DWDM"] == "SIM"]
