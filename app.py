@@ -167,7 +167,6 @@ def apply_colors(df):
             if m2:
                 days = float(m2.group(1).replace(',', '.'))
         
-        # Escala de cores do Aging baseada na regra SLA do NOC
         if days >= 10:
             return 'background-color: #8B0000; color: white; font-weight: bold;'
         elif days >= 5:
@@ -1115,17 +1114,24 @@ elif menu == "📺 Apresentação Executiva":
         df_view = df if selected_aging == "Todos" else df[df["AGING"].astype(str) == selected_aging]
         st.write("")
 
-        st.markdown("### 📍 Visão Geográfica Global (Top 10 Quadrantes Impactados)")
+        st.markdown("### 📍 Visão Geográfica Global (Chamados por Quadrante)")
         if "QUADRANTE" in df_view.columns and not df_view.empty:
-            quad_counts = df_view[df_view["QUADRANTE"] != "NÃO INFORMADO"]["QUADRANTE"].value_counts().head(10).reset_index()
-            quad_counts.columns = ["Quadrante", "Qtde"]
-            if not quad_counts.empty:
-                chart_global = alt.Chart(quad_counts).mark_bar(color="#F59E0B").encode(
-                    y=alt.Y('Quadrante:N', sort='-x', title=""),
-                    x=alt.X('Qtde:Q', title=""),
-                    tooltip=['Quadrante', 'Qtde']
-                ).properties(height=250)
-                st.altair_chart(chart_global, use_container_width=True)
+            quad_counts_all = df_view["QUADRANTE"].value_counts().reset_index()
+            quad_counts_all.columns = ["Quadrante", "Qtde Chamados"]
+            
+            if not quad_counts_all.empty:
+                c_geo1, c_geo2 = st.columns([2, 1])
+                with c_geo1:
+                    st.caption("Top 10 Quadrantes Impactados (Gráfico)")
+                    chart_global = alt.Chart(quad_counts_all.head(10)).mark_bar(color="#F59E0B").encode(
+                        y=alt.Y('Quadrante:N', sort='-x', title=""),
+                        x=alt.X('Qtde Chamados:Q', title=""),
+                        tooltip=['Quadrante', 'Qtde Chamados']
+                    ).properties(height=250)
+                    st.altair_chart(chart_global, use_container_width=True)
+                with c_geo2:
+                    st.caption("Quantidade Completa por Quadrante")
+                    st.dataframe(quad_counts_all, use_container_width=True, hide_index=True, height=250)
             else:
                 st.info("Nenhum quadrante mapeado para os chamados nesta faixa de Aging.")
         else:
@@ -1138,7 +1144,6 @@ elif menu == "📺 Apresentação Executiva":
                 st.markdown(f"<h3 style='color: {color_theme};'>{emoji} {title}</h3>", unsafe_allow_html=True)
                 stats = get_status_counts(sub_df, status_col="STATUS")
                 
-                # Para Tratativa: Tudo que NÃO está Encerrado nem Tramitado
                 pendentes = sub_df[~sub_df["STATUS"].isin(["Tramitado", "Encerrado"])].shape[0]
                 
                 cm1, cm2 = st.columns(2)
