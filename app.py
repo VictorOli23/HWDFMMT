@@ -312,9 +312,9 @@ def get_single_series(df, col_name_hints, fallback_val=""):
 def extrair_colunas(df):
     return {
         "TSK": get_single_series(df, ["NÚMERO", "NUMERO", "TSK", "CHAMADO", "ORDEM"], ""),
-        "EVENTO": get_single_series(df, ["EVENTO", "ICTTTID", "INCIDENTE"], ""),
+        "EVENTO": get_single_series(df, ["EVENTO", "ICTTTID", "INCIDENTE", "TICKET"], ""),
         "END_ID": get_single_series(df, ["END ID", "END_ID", "SITE"], ""),
-        "NE_ID": get_single_series(df, ["NE ID DESCRIÇÃO", "NE ID DO EVENTO", "NENAME", "NE ID"], ""),
+        "NE_ID": get_single_series(df, ["NE ID DESCRIÇÃO", "NE ID DO EVENTO", "NENAME", "NE ID", "ELEMENTO", "SIGLA", "NOME DO ELEMENTO"], ""),
         "TIPO_EQUIPAMENTO": get_single_series(df, ["TIPO DO EQUIPAMENTO", "TIPO NE", "EQUIPAMENTO"], ""),
         "STATUS": get_single_series(df, ["STATUS"], "Não Acionado"),
         "FALHA": get_single_series(df, ["ALARME", "FALHA"], ""),
@@ -550,28 +550,61 @@ elif menu == "📥 Upload & Processamento":
                     df_fmt["TECNICO"] = df_fmt.apply(lambda r: dict_tec.get(r["TSK"], r["TECNICO"]), axis=1)
                     df_fmt["OBS"] = df_fmt.apply(lambda r: dict_obs.get(r["TSK"], r["OBS"]), axis=1)
 
+                # ==========================================================
+                # OMNI-SEARCH EXCLUSIVO CONTRA GRAFANA (BLINDADO CONTRA DECIMAIS)
+                # ==========================================================
                 global_names = set()
                 global_events = set()
+                global_tsks = set()
                 
                 df_graf_process = df_graf_raw if f_grafana else load_table("backlog_grafana")
                 if not df_graf_process.empty:
                     cols = [str(c).upper().strip() for c in df_graf_process.columns]
-                    col_graf_ne = next((c for c in cols if any(k in c for k in ["NENAME", "NE ID", "ELEMENTO"])), None)
+                    
+                    col_graf_tsk = next((c for c in cols if any(k in c for k in ["TSK", "CHAMADO", "ORDEM"])), None)
+                    col_graf_ne = next((c for c in cols if any(k in c for k in ["NENAME", "NE ID", "ELEMENTO", "SIGLA"])), None)
                     col_graf_eve = next((c for c in cols if any(k in c for k in ["ICTTTID", "EVENTO", "INCIDENTE"])), None)
-                    if col_graf_ne: global_names.update(df_graf_process.iloc[:, cols.index(col_graf_ne)].dropna().astype(str).str.strip().str.upper())
-                    if col_graf_eve: global_events.update(df_graf_process.iloc[:, cols.index(col_graf_eve)].dropna().astype(str).str.strip().str.upper())
+                    
+                    # Função para remover '.0' dos IDs lidos como Float pelo Pandas
+                    def clean_id(series):
+                        return series.dropna().astype(str).str.strip().str.upper().apply(lambda x: x[:-2] if x.endswith('.0') else x)
+
+                    if col_graf_tsk: global_tsks.update(clean_id(df_graf_process.iloc[:, cols.index(col_graf_tsk)]))
+                    if col_graf_ne: global_names.update(clean_id(df_graf_process.iloc[:, cols.index(col_graf_ne)]))
+                    if col_graf_eve: global_events.update(clean_id(df_graf_process.iloc[:, cols.index(col_graf_eve)]))
 
                 lixos = ["", "NAN", "NONE", "NULL", "-", "ROUTER", "SWITCH", "SIM", "NÃO", "SEM TSK"]
                 for lx in lixos: 
                     global_names.discard(lx)
                     global_events.discard(lx)
+                    global_tsks.discard(lx)
 
                 def check_anel_omni_search(row):
-                    if not global_names and not global_events: return "NÃO"
+                    if not global_names and not global_events and not global_tsks: return "NÃO"
+                    
+                    tsk_fmt = str(row.get("TSK", "")).strip().upper()
+                    if tsk_fmt.endswith('.0'): tsk_fmt = tsk_fmt[:-2]
+                    
                     ne_fmt = str(row.get("NE_ID", "")).strip().upper()
+                    if ne_fmt.endswith('.0'): ne_fmt = ne_fmt[:-2]
+                    
                     ev_fmt = str(row.get("EVENTO", "")).strip().upper()
+                    if ev_fmt.endswith('.0'): ev_fmt = ev_fmt[:-2]
+                    
+                    # 1. Checa por TSK exata
+                    if len(tsk_fmt) >= 5 and tsk_fmt in global_tsks: return "SIM"
+                    
+                    # 2. Checa por Evento exato
                     if len(ev_fmt) >= 5 and ev_fmt in global_events: return "SIM"
-                    if len(ne_fmt) >= 5 and ne_fmt in global_names: return "SIM"
+                    
+                    # 3. Checa por NE_ID exato e cruzamento parcial (Substrings)
+                    if len(ne_fmt) >= 4:
+                        if ne_fmt in global_names: return "SIM"
+                        for g_name in global_names:
+                            # Ex: Grafana tem "SPO-LAP01" e Fixa tem "SPO-LAP01-THWW20"
+                            if len(g_name) >= 5 and (g_name in ne_fmt or ne_fmt in g_name):
+                                return "SIM"
+                                
                     return "NÃO"
 
                 df_fmt["ANEL_ABERTO"] = df_fmt.apply(check_anel_omni_search, axis=1)
