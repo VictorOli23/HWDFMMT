@@ -295,7 +295,6 @@ def load_file(file, target_sheet_hints=None):
                     break
         df = pd.read_excel(xls, sheet_name=sheet_to_load)
         
-    # Super Filtro de Cabeçalho (Evita colunas Unnamed ou em branco)
     if len(df) > 0:
         if any(str(c).startswith("Unnamed") or str(c).strip() == "" for c in df.columns[:3]):
             for idx in range(min(15, len(df))):
@@ -309,7 +308,6 @@ def load_file(file, target_sheet_hints=None):
 
 def get_single_series(df, col_name_hints, fallback_val=""):
     if df.empty: return pd.Series(dtype=str)
-    # Limpa quebras de linha e espaços duplos dos nomes das colunas
     cols_clean = [re.sub(r'\s+', ' ', str(c).upper().strip()) for c in df.columns]
     
     col_found = None
@@ -334,7 +332,6 @@ def extrair_colunas(df):
             "TECNICO": pd.Series(dtype=str), "RESUMO": pd.Series(dtype=str), "OBS": pd.Series(dtype=str)
         }
     
-    # 🚨 REGRA DE SOBREVIVÊNCIA: Se não achar a coluna de TSK pelos nomes, pega a 1ª coluna da planilha.
     tsk_s = get_single_series(df, ["NÚMERO", "NUMERO", "TSK", "CHAMADO", "ORDEM", "TICKET", "ID", "PROTOCOLO", "REQ"], "")
     if (tsk_s == "").all() and len(df.columns) > 0:
         tsk_s = df.iloc[:, 0].fillna("").astype(str)
@@ -375,16 +372,36 @@ def get_status_counts(sub_df, status_col="STATUS"):
     }
 
 def calculate_tempo_chamado(row):
+    """Calcula o tempo do chamado com blindagem estrita para evitar estouros de datas (ex: 178 dias)."""
+    ag_val = str(row.get("AGING", "")).strip()
+    
+    # Se a coluna AGING já vier preenchida corretamente com o tempo (ex: "2d 04h" ou "1.5"), use-a preferencialmente
+    if ag_val and ag_val not in ["nan", "None", "-", ""]:
+        # Se for um número puro, formata para dias
+        if re.match(r'^\d+([.,]\d+)?$', ag_val):
+            return f"{float(ag_val.replace(',', '.')):.0f}d 00h"
+        return ag_val
+
     data_cria = row.get("DATA_CRIACAO", None)
     if pd.notnull(data_cria) and str(data_cria).strip() not in ["", "nan", "None", "-"]:
         try:
-            dt = pd.to_datetime(data_cria, dayfirst=True)
-            diff = datetime.now() - dt
-            days = diff.days; hours, remainder = divmod(diff.seconds, 3600); mins, _ = divmod(remainder, 60)
-            return f"{days}d {hours:02d}h {mins:02d}m"
-        except: pass
-    ag_val = str(row.get("AGING", "")).strip()
-    return ag_val if ag_val and ag_val not in ["nan", "None"] else "0d 00h"
+            # Tenta converter com dia primeiro, se falhar tenta formato padrão
+            dt = pd.to_datetime(data_cria, dayfirst=True, errors='coerce')
+            if pd.isnull(dt):
+                dt = pd.to_datetime(data_cria, errors='coerce')
+                
+            if pd.notnull(dt):
+                diff = datetime.now() - dt
+                days = diff.days
+                if days < 0 or days > 365:  # Trava de segurança contra datas futuras ou corrompidas de anos anteriores
+                    return "0d 00h"
+                hours, remainder = divmod(diff.seconds, 3600)
+                mins, _ = divmod(remainder, 60)
+                return f"{days}d {hours:02d}h {mins:02d}m"
+        except: 
+            pass
+            
+    return "0d 00h"
 
 # ==========================================
 # 6. MENUS DA BARRA LATERAL
@@ -462,7 +479,7 @@ if menu == "👤 Gestão de Usuários (Admin)":
 # ==========================================
 elif menu == "📥 Upload & Processamento":
     st.title("📥 Ingestão, Fusão e Cruzamento")
-    st.caption("FUSÃO ATIVA: Retenção de edições manuais garantida. Edições não são perdidas no re-upload.")
+    st.caption("FUSÃO ISOLADA: Retenção de edições manuais garantida sem contaminação entre Fixa e Móvel.")
 
     st.markdown("### 📊 Status Atual das Bases na Nuvem")
     df_fixa_check = load_table("backlog_fixa")
@@ -511,7 +528,7 @@ elif menu == "📥 Upload & Processamento":
         if not f_fmt:
             st.error("A Base Total Fixa FMT é obrigatória.")
         else:
-            with st.spinner("Realizando a Fusão das bases, preservando edições e cruzando Anéis..."):
+            with st.spinner("Processando e isolando as bases na nuvem..."):
                 st.cache_data.clear() 
                 
                 df_old_fixa = load_table("backlog_fixa")
@@ -526,7 +543,6 @@ elif menu == "📥 Upload & Processamento":
                 
                 df_fmt_raw = load_file(f_fmt, ["BACKLOG", "FMT", "TASK", "EVENTO"])
                 
-                df_fmmt_raw = pd.DataFrame()
                 if f_fmmt:
                     df_fmmt_raw = load_file(f_fmmt, ["FMMT", "MOVEL", "SMART"])
                     if not df_fmmt_raw.empty: df_fmmt_raw.to_sql('backlog_fmmt', engine, if_exists='replace', index=False)
@@ -546,17 +562,10 @@ elif menu == "📥 Upload & Processamento":
 
                 quad_map = get_quadrantes_map()
                 
-                df_fmt_base = pd.DataFrame(extrair_colunas(df_fmt_raw))
-                df_fmt_base["ORIGEM"] = "FMT"
+                # PROCESSAMENTO EXCLUSIVO DA FIXA (FMT) - SEM MISTURAR COM MÓVEL
+                df_fmt = pd.DataFrame(extrair_colunas(df_fmt_raw))
+                df_fmt["ORIGEM"] = "FMT"
                 
-                df_fmmt_process = df_fmmt_raw if f_fmmt else load_table("backlog_fmmt")
-                if not df_fmmt_process.empty:
-                    df_fmmt_base = pd.DataFrame(extrair_colunas(df_fmmt_process))
-                    df_fmmt_base["ORIGEM"] = "FMMT (Fusão)"
-                    df_fmt = pd.concat([df_fmt_base, df_fmmt_base], ignore_index=True)
-                else:
-                    df_fmt = df_fmt_base
-
                 s_dwdm = df_fmt["TIPO_EQUIPAMENTO"].apply(lambda val: "SIM" if "DWDM" in str(val).upper().strip() else "NÃO")
                 df_fmt["DWDM"] = s_dwdm
                 df_fmt["STATUS"] = df_fmt["STATUS"].apply(categorize_status)
@@ -679,7 +688,7 @@ elif menu == "📥 Upload & Processamento":
                 df_fmt.to_sql('backlog_fixa', engine, if_exists='replace', index=False)
                 aneis_count = (df_fmt["ANEL_ABERTO"] == "SIM").sum()
                 
-                st.success(f"✅ Fusão e Retenção Concluídas! Suas edições foram salvas e mescladas.\nAnéis Abertos encontrados: {aneis_count}")
+                st.success(f"✅ Processamento Concluído! Fixa isolada com sucesso.\nAnéis Abertos encontrados: {aneis_count}")
 
                 if f_movel_backlog:
                     df_movel_raw = load_file(f_movel_backlog, ["MOVEL", "MOBILE", "BACKLOG"])
@@ -752,7 +761,7 @@ elif menu == "📂 Backlog Operacional (Fixa)":
             st_opts = ["Todos"] + sorted(list(df_bk_view["STATUS"].dropna().unique()))
             sel_st = st.selectbox("Status Específico:", options=st_opts, key="bk_status")
         with r1_c3:
-            origem_opts = ["Todas", "FMT", "FMMT (Fusão)"]
+            origem_opts = ["Todas", "FMT"]
             sel_origem = st.selectbox("Origem (Base):", options=origem_opts, key="bk_origem")
         with r1_c4:
             busca_bk = st.text_input("🔍 Busca rápida:", key="bk_busca")
