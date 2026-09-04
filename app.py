@@ -372,20 +372,12 @@ def get_status_counts(sub_df, status_col="STATUS"):
     }
 
 def calculate_tempo_chamado(row):
-    """Calcula o tempo do chamado com blindagem estrita para evitar estouros de datas (ex: 178 dias)."""
-    ag_val = str(row.get("AGING", "")).strip()
-    
-    # Se a coluna AGING já vier preenchida corretamente com o tempo (ex: "2d 04h" ou "1.5"), use-a preferencialmente
-    if ag_val and ag_val not in ["nan", "None", "-", ""]:
-        # Se for um número puro, formata para dias
-        if re.match(r'^\d+([.,]\d+)?$', ag_val):
-            return f"{float(ag_val.replace(',', '.')):.0f}d 00h"
-        return ag_val
-
+    """Calcula o tempo do chamado estritamente com base na Data de Criação em relação a hoje."""
     data_cria = row.get("DATA_CRIACAO", None)
+    
     if pd.notnull(data_cria) and str(data_cria).strip() not in ["", "nan", "None", "-"]:
         try:
-            # Tenta converter com dia primeiro, se falhar tenta formato padrão
+            # Tenta converter explicitamente priorizando o padrão brasileiro (dia/mês/ano)
             dt = pd.to_datetime(data_cria, dayfirst=True, errors='coerce')
             if pd.isnull(dt):
                 dt = pd.to_datetime(data_cria, errors='coerce')
@@ -393,7 +385,7 @@ def calculate_tempo_chamado(row):
             if pd.notnull(dt):
                 diff = datetime.now() - dt
                 days = diff.days
-                if days < 0 or days > 365:  # Trava de segurança contra datas futuras ou corrompidas de anos anteriores
+                if days < 0:
                     return "0d 00h"
                 hours, remainder = divmod(diff.seconds, 3600)
                 mins, _ = divmod(remainder, 60)
@@ -401,6 +393,7 @@ def calculate_tempo_chamado(row):
         except: 
             pass
             
+    # Fallback caso a data esteja vazia ou inválida
     return "0d 00h"
 
 # ==========================================
@@ -528,7 +521,7 @@ elif menu == "📥 Upload & Processamento":
         if not f_fmt:
             st.error("A Base Total Fixa FMT é obrigatória.")
         else:
-            with st.spinner("Processando e isolando as bases na nuvem..."):
+            with st.spinner("Processando e calculando o tempo dos chamados em relação a hoje..."):
                 st.cache_data.clear() 
                 
                 df_old_fixa = load_table("backlog_fixa")
@@ -562,7 +555,6 @@ elif menu == "📥 Upload & Processamento":
 
                 quad_map = get_quadrantes_map()
                 
-                # PROCESSAMENTO EXCLUSIVO DA FIXA (FMT) - SEM MISTURAR COM MÓVEL
                 df_fmt = pd.DataFrame(extrair_colunas(df_fmt_raw))
                 df_fmt["ORIGEM"] = "FMT"
                 
@@ -576,6 +568,8 @@ elif menu == "📥 Upload & Processamento":
 
                 df_fmt["QUADRANTE"] = df_fmt["END_ID"].astype(str).str.strip().str.upper().map(quad_map)
                 df_fmt["QUADRANTE"] = df_fmt["QUADRANTE"].fillna(df_fmt["END_ID"].astype(str).apply(lambda x: re.search(r'(QD\s*\d+|ANF\s*\d+)', str(x), re.IGNORECASE).group(0).upper() if re.search(r'(QD\s*\d+|ANF\s*\d+)', str(x), re.IGNORECASE) else "NÃO INFORMADO"))
+                
+                # CÁLCULO DE TEMPO DO CHAMADO BASEADO ESTRITAMENTE NA DATA DE CRIAÇÃO VS HOJE
                 df_fmt["TEMPO_DO_CHAMADO"] = df_fmt.apply(calculate_tempo_chamado, axis=1)
 
                 if not df_old_fixa.empty:
