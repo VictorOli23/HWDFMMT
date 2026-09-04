@@ -153,7 +153,6 @@ def verify_login(username, password):
     return False, False
 
 def apply_colors(df):
-    """Aplica o motor de cores estritamente na coluna de tempo real (TEMPO_DO_CHAMADO e AGING)."""
     def style_aging(val):
         s = str(val).strip().lower()
         if not s or s in ['nan', 'none', '-']: return ''
@@ -273,6 +272,7 @@ def get_crc_data():
 def load_file(file, target_sheet_hints=None):
     if file is None: return pd.DataFrame()
     
+    df = pd.DataFrame()
     if file.name.endswith(".csv"):
         content = file.getvalue().decode('utf-8', errors='ignore')
         lines = content.splitlines()
@@ -284,8 +284,7 @@ def load_file(file, target_sheet_hints=None):
                 df = pd.read_csv(io.StringIO(clean_content), sep=';')
         except:
             try: df = pd.read_csv(io.StringIO(clean_content), sep=';', on_bad_lines='skip')
-            except: df = pd.DataFrame()
-        return df.drop_duplicates()
+            except: pass
     else:
         xls = pd.ExcelFile(file)
         sheet_to_load = xls.sheet_names[0]
@@ -295,34 +294,64 @@ def load_file(file, target_sheet_hints=None):
                     sheet_to_load = s
                     break
         df = pd.read_excel(xls, sheet_name=sheet_to_load)
-        if len(df) > 0 and any(str(c).startswith("Unnamed") for c in df.columns[:3]):
+        
+    # Super Filtro de Cabeçalho (Evita colunas Unnamed ou em branco)
+    if len(df) > 0:
+        if any(str(c).startswith("Unnamed") or str(c).strip() == "" for c in df.columns[:3]):
             for idx in range(min(15, len(df))):
                 row_vals = [str(x).upper() for x in df.iloc[idx].values]
-                if any(k in "".join(row_vals) for k in ["NÚMERO", "NUMERO", "TSK", "END ID", "NE ID", "ICTTTID", "EVENTO"]):
+                if any(k in "".join(row_vals) for k in ["NÚMERO", "NUMERO", "TSK", "END ID", "NE ID", "ICTTTID", "EVENTO", "TICKET", "ID"]):
                     df.columns = df.iloc[idx]
                     df = df.iloc[idx+1:].reset_index(drop=True)
                     break
-        return df.drop_duplicates()
+    
+    return df.drop_duplicates() if not df.empty else df
 
 def get_single_series(df, col_name_hints, fallback_val=""):
-    col_found = next((c for hint in col_name_hints for c in df.columns if hint in str(c).upper().strip()), None)
-    if not col_found: return pd.Series([fallback_val] * len(df), index=df.index, dtype=str)
-    return df[col_found].iloc[:, 0].fillna("").astype(str) if isinstance(df[col_found], pd.DataFrame) else df[col_found].fillna("").astype(str)
+    if df.empty: return pd.Series(dtype=str)
+    # Limpa quebras de linha e espaços duplos dos nomes das colunas
+    cols_clean = [re.sub(r'\s+', ' ', str(c).upper().strip()) for c in df.columns]
+    
+    col_found = None
+    for i, c_clean in enumerate(cols_clean):
+        if any(hint in c_clean for hint in col_name_hints):
+            col_found = df.columns[i]
+            break
+            
+    if col_found is None: return pd.Series([fallback_val] * len(df), index=df.index, dtype=str)
+    
+    res = df[col_found]
+    if isinstance(res, pd.DataFrame):
+        res = res.iloc[:, 0]
+    return res.fillna("").astype(str)
 
 def extrair_colunas(df):
+    if df.empty:
+        return {
+            "TSK": pd.Series(dtype=str), "EVENTO": pd.Series(dtype=str), "END_ID": pd.Series(dtype=str), 
+            "NE_ID": pd.Series(dtype=str), "TIPO_EQUIPAMENTO": pd.Series(dtype=str), "STATUS": pd.Series(dtype=str), 
+            "FALHA": pd.Series(dtype=str), "AGING": pd.Series(dtype=str), "DATA_CRIACAO": pd.Series(dtype=str), 
+            "TECNICO": pd.Series(dtype=str), "RESUMO": pd.Series(dtype=str), "OBS": pd.Series(dtype=str)
+        }
+    
+    # 🚨 REGRA DE SOBREVIVÊNCIA: Se não achar a coluna de TSK pelos nomes, pega a 1ª coluna da planilha.
+    tsk_s = get_single_series(df, ["NÚMERO", "NUMERO", "TSK", "CHAMADO", "ORDEM", "TICKET", "ID", "PROTOCOLO", "REQ"], "")
+    if (tsk_s == "").all() and len(df.columns) > 0:
+        tsk_s = df.iloc[:, 0].fillna("").astype(str)
+        
     return {
-        "TSK": get_single_series(df, ["NÚMERO", "NUMERO", "TSK", "CHAMADO", "ORDEM"], ""),
-        "EVENTO": get_single_series(df, ["EVENTO", "ICTTTID", "INCIDENTE", "TICKET"], ""),
-        "END_ID": get_single_series(df, ["END ID", "END_ID", "SITE"], ""),
-        "NE_ID": get_single_series(df, ["NE ID DESCRIÇÃO", "NE ID DO EVENTO", "NENAME", "NE ID", "ELEMENTO", "SIGLA", "NOME DO ELEMENTO"], ""),
-        "TIPO_EQUIPAMENTO": get_single_series(df, ["TIPO DO EQUIPAMENTO", "TIPO NE", "EQUIPAMENTO"], ""),
-        "STATUS": get_single_series(df, ["STATUS"], "Não Acionado"),
+        "TSK": tsk_s,
+        "EVENTO": get_single_series(df, ["EVENTO", "ICTTTID", "INCIDENTE"], ""),
+        "END_ID": get_single_series(df, ["END ID", "END_ID", "SITE", "LOCALIDADE"], ""),
+        "NE_ID": get_single_series(df, ["NE ID DESCRIÇÃO", "NE ID DO EVENTO", "NENAME", "NE ID", "ELEMENTO", "SIGLA"], ""),
+        "TIPO_EQUIPAMENTO": get_single_series(df, ["TIPO DO EQUIPAMENTO", "TIPO NE", "EQUIPAMENTO", "FAMILIA"], ""),
+        "STATUS": get_single_series(df, ["STATUS", "SITUAÇÃO"], "Não Acionado"),
         "FALHA": get_single_series(df, ["ALARME", "FALHA"], ""),
-        "AGING": get_single_series(df, ["AGING"], "-"),
-        "DATA_CRIACAO": get_single_series(df, ["DATA DE CRIAÇÃO", "DATA_CRIACAO", "CRIA"], ""),
+        "AGING": get_single_series(df, ["AGING", "TEMPO", "SLA"], "-"),
+        "DATA_CRIACAO": get_single_series(df, ["DATA DE CRIAÇÃO", "DATA_CRIACAO", "CRIA", "ABERTURA"], ""),
         "TECNICO": get_single_series(df, ["NOME DO TÉCNICO", "NOME TÉCNICO CAMPO", "TÉCNICO", "TECNICO", "RESPONSÁVEL"], ""),
         "RESUMO": get_single_series(df, ["RESUMO", "OBSERVAÇÕES"], ""),
-        "OBS": get_single_series(df, ["OBS", "NOTAS"], "")
+        "OBS": get_single_series(df, ["OBS", "NOTAS", "HISTORICO"], "")
     }
 
 def categorize_status(st_str):
@@ -550,9 +579,6 @@ elif menu == "📥 Upload & Processamento":
                     df_fmt["TECNICO"] = df_fmt.apply(lambda r: dict_tec.get(r["TSK"], r["TECNICO"]), axis=1)
                     df_fmt["OBS"] = df_fmt.apply(lambda r: dict_obs.get(r["TSK"], r["OBS"]), axis=1)
 
-                # ==========================================================
-                # OMNI-SEARCH EXCLUSIVO CONTRA GRAFANA (BLINDADO CONTRA DECIMAIS)
-                # ==========================================================
                 global_names = set()
                 global_events = set()
                 global_tsks = set()
@@ -565,7 +591,6 @@ elif menu == "📥 Upload & Processamento":
                     col_graf_ne = next((c for c in cols if any(k in c for k in ["NENAME", "NE ID", "ELEMENTO", "SIGLA"])), None)
                     col_graf_eve = next((c for c in cols if any(k in c for k in ["ICTTTID", "EVENTO", "INCIDENTE"])), None)
                     
-                    # Função para remover '.0' dos IDs lidos como Float pelo Pandas
                     def clean_id(series):
                         return series.dropna().astype(str).str.strip().str.upper().apply(lambda x: x[:-2] if x.endswith('.0') else x)
 
@@ -591,20 +616,13 @@ elif menu == "📥 Upload & Processamento":
                     ev_fmt = str(row.get("EVENTO", "")).strip().upper()
                     if ev_fmt.endswith('.0'): ev_fmt = ev_fmt[:-2]
                     
-                    # 1. Checa por TSK exata
                     if len(tsk_fmt) >= 5 and tsk_fmt in global_tsks: return "SIM"
-                    
-                    # 2. Checa por Evento exato
                     if len(ev_fmt) >= 5 and ev_fmt in global_events: return "SIM"
-                    
-                    # 3. Checa por NE_ID exato e cruzamento parcial (Substrings)
                     if len(ne_fmt) >= 4:
                         if ne_fmt in global_names: return "SIM"
                         for g_name in global_names:
-                            # Ex: Grafana tem "SPO-LAP01" e Fixa tem "SPO-LAP01-THWW20"
                             if len(g_name) >= 5 and (g_name in ne_fmt or ne_fmt in g_name):
                                 return "SIM"
-                                
                     return "NÃO"
 
                 df_fmt["ANEL_ABERTO"] = df_fmt.apply(check_anel_omni_search, axis=1)
