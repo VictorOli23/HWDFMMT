@@ -188,7 +188,7 @@ def apply_colors(df):
         return df
 
 if not st.session_state['logged_in']:
-    st.markdown("<h1 style='text-align: center; color: #1E3A8A;'>📡 NOC FMT Login</h1>", unsafe_allow_html=True)
+    st.markdown("<h1 style='text-align: center; color: #1E3A8A;s'>📡 NOC FMT Login</h1>", unsafe_allow_html=True)
     st.markdown("---")
     
     col_l1, col_l2, col_l3 = st.columns([1, 1, 1])
@@ -375,7 +375,6 @@ def calculate_tempo_chamado(row):
     
     if pd.notnull(data_cria) and str(data_cria).strip() not in ["", "nan", "None", "-"]:
         try:
-            # Tenta converter explicitamente priorizando o formato brasileiro (dia/mês/ano)
             dt = pd.to_datetime(data_cria, dayfirst=True, errors='coerce')
             if pd.isnull(dt):
                 dt = pd.to_datetime(data_cria, errors='coerce')
@@ -468,8 +467,8 @@ if menu == "👤 Gestão de Usuários (Admin)":
 # ABA: UPLOAD & PROCESSAMENTO
 # ==========================================
 elif menu == "📥 Upload & Processamento":
-    st.title("📥 Ingestão, Fusão e Cruzamento")
-    st.caption("FUSÃO ISOLADA: Retenção de edições manuais garantida sem contaminação entre Fixa e Móvel.")
+    st.title("📥 Ingestão, Fusão e Cruzamento (FMT + FMMT)")
+    st.caption("FUSÃO E CRUZAMENTO ATIVO: Relacionando Anéis, Grafana e Bases Fixa/Móvel com segurança.")
 
     st.markdown("### 📊 Status Atual das Bases na Nuvem")
     df_fixa_check = load_table("backlog_fixa")
@@ -484,11 +483,11 @@ elif menu == "📥 Upload & Processamento":
             st.success(f"🟢 **Fixa:** {len(df_fixa_check)} reg.")
             if st.button("🗑️ Limpar Fixa"): drop_table("backlog_fixa"); st.rerun()
         if not df_fmmt_check.empty:
-            st.success(f"🟢 **FMMT:** {len(df_fmmt_check)} reg.")
+            st.success(f"🟢 **FMMT (Móvel/Anéis):** {len(df_fmmt_check)} reg.")
             if st.button("🗑️ Limpar FMMT"): drop_table("backlog_fmmt"); st.rerun()
     with c2:
         if not df_movel_check.empty:
-            st.success(f"🟢 **Móvel:** {len(df_movel_check)} reg.")
+            st.success(f"🟢 **Móvel (Dedicado):** {len(df_movel_check)} reg.")
             if st.button("🗑️ Limpar Móvel"): drop_table("backlog_movel"); st.rerun()
         if not df_b2b_check.empty:
             st.success(f"🟢 **B2B:** {len(df_b2b_check)} reg.")
@@ -518,7 +517,7 @@ elif menu == "📥 Upload & Processamento":
         if not f_fmt:
             st.error("A Base Total Fixa FMT é obrigatória.")
         else:
-            with st.spinner("Processando e calculando o tempo real dos chamados..."):
+            with st.spinner("Processando, cruzando FMMT/Grafana e calculando o tempo real..."):
                 st.cache_data.clear() 
                 
                 df_old_fixa = load_table("backlog_fixa")
@@ -533,14 +532,17 @@ elif menu == "📥 Upload & Processamento":
                 
                 df_fmt_raw = load_file(f_fmt, ["BACKLOG", "FMT", "TASK", "EVENTO"])
                 
+                # PROCESSAMENTO DA FMMT (Móvel / Anéis)
                 if f_fmmt:
                     df_fmmt_raw = load_file(f_fmmt, ["FMMT", "MOVEL", "SMART"])
-                    if not df_fmmt_raw.empty: df_fmmt_raw.to_sql('backlog_fmmt', engine, if_exists='replace', index=False)
+                    if not df_fmmt_raw.empty: 
+                        df_fmmt_raw.to_sql('backlog_fmmt', engine, if_exists='replace', index=False)
 
                 df_graf_raw = pd.DataFrame()
                 if f_grafana:
                     df_graf_raw = load_file(f_grafana, ["GRAFANA", "ANEIS", "ALARMES"])
-                    if not df_graf_raw.empty: df_graf_raw.to_sql('backlog_grafana', engine, if_exists='replace', index=False)
+                    if not df_graf_raw.empty: 
+                        df_graf_raw.to_sql('backlog_grafana', engine, if_exists='replace', index=False)
 
                 if f_quadrantes:
                     df_q = load_file(f_quadrantes, ["QUAD", "QD", "ANF"])
@@ -552,6 +554,7 @@ elif menu == "📥 Upload & Processamento":
 
                 quad_map = get_quadrantes_map()
                 
+                # 1. PROCESSAMENTO DA FIXA (FMT)
                 df_fmt = pd.DataFrame(extrair_colunas(df_fmt_raw))
                 df_fmt["ORIGEM"] = "FMT"
                 
@@ -566,8 +569,25 @@ elif menu == "📥 Upload & Processamento":
                 df_fmt["QUADRANTE"] = df_fmt["END_ID"].astype(str).str.strip().str.upper().map(quad_map)
                 df_fmt["QUADRANTE"] = df_fmt["QUADRANTE"].fillna(df_fmt["END_ID"].astype(str).apply(lambda x: re.search(r'(QD\s*\d+|ANF\s*\d+)', str(x), re.IGNORECASE).group(0).upper() if re.search(r'(QD\s*\d+|ANF\s*\d+)', str(x), re.IGNORECASE) else "NÃO INFORMADO"))
                 
-                # CÁLCULO DE TEMPO DO CHAMADO BASEADO EXCLUSIVAMENTE NA DATA DE CRIAÇÃO VS HOJE
                 df_fmt["TEMPO_DO_CHAMADO"] = df_fmt.apply(calculate_tempo_chamado, axis=1)
+
+                # 2. SE HOUVER BASE FMMT (MÓVEL/ANÉIS), FAZ A FUSÃO UNIFICADA NA FIXA
+                if f_fmmt:
+                    df_fmmt_processed = load_file(f_fmmt, ["FMMT", "MOVEL", "SMART"])
+                    if not df_fmmt_processed.empty:
+                        df_fmmt_ext = pd.DataFrame(extrair_colunas(df_fmmt_processed))
+                        df_fmmt_ext["ORIGEM"] = "FMMT"
+                        df_fmmt_ext["DWDM"] = "NÃO"
+                        df_fmmt_ext["STATUS"] = df_fmmt_ext["STATUS"].apply(categorize_status)
+                        df_fmmt_ext["RESUMO"] = df_fmmt_ext["RESUMO"].apply(lambda r: "Em Campo" if "CAMPO" in str(r).upper() else ("Tramitado" if "TRAMITADO" in str(r).upper() else ("Encerrado" if "ENCERRADO" in str(r).upper() else str(r))))
+                        df_fmmt_ext = df_fmmt_ext[df_fmmt_ext["TSK"].astype(str).str.strip() != ""]
+                        df_fmmt_ext["QUADRANTE"] = df_fmmt_ext["END_ID"].astype(str).str.strip().str.upper().map(quad_map)
+                        df_fmmt_ext["QUADRANTE"] = df_fmmt_ext["QUADRANTE"].fillna(df_fmmt_ext["END_ID"].astype(str).apply(lambda x: re.search(r'(QD\s*\d+|ANF\s*\d+)', str(x), re.IGNORECASE).group(0).upper() if re.search(r'(QD\s*\d+|ANF\s*\d+)', str(x), re.IGNORECASE) else "NÃO INFORMADO"))
+                        df_fmmt_ext["TEMPO_DO_CHAMADO"] = df_fmmt_ext.apply(calculate_tempo_chamado, axis=1)
+                        
+                        # Concatena sem duplicar TSKs
+                        df_fmt = pd.concat([df_fmt, df_fmmt_ext], ignore_index=True)
+                        df_fmt = df_fmt.drop_duplicates(subset=["TSK"], keep='first')
 
                 if not df_old_fixa.empty:
                     dict_st = dict(zip(df_old_fixa["TSK"], df_old_fixa["STATUS"]))
@@ -678,7 +698,7 @@ elif menu == "📥 Upload & Processamento":
                 df_fmt.to_sql('backlog_fixa', engine, if_exists='replace', index=False)
                 aneis_count = (df_fmt["ANEL_ABERTO"] == "SIM").sum()
                 
-                st.success(f"✅ Processamento Concluído! Fixa isolada com sucesso.\nAnéis Abertos encontrados: {aneis_count}")
+                st.success(f"✅ Processamento Concluído! Bases FMT e FMMT fundidas com sucesso.\nAnéis Abertos cruzados: {aneis_count}")
 
                 if f_movel_backlog:
                     df_movel_raw = load_file(f_movel_backlog, ["MOVEL", "MOBILE", "BACKLOG"])
@@ -721,7 +741,7 @@ elif menu == "📥 Upload & Processamento":
 # ABA 4: BACKLOG OPERACIONAL (FIXA)
 # ==========================================
 elif menu == "📂 Backlog Operacional (Fixa)":
-    st.title("📂 Backlog Operacional (Rede Fixa)")
+    st.title("📂 Backlog Operacional (Rede Fixa & FMMT)")
     
     col_sync, _ = st.columns([1, 5])
     if col_sync.button("🔄 Atualizar Base da Nuvem"): 
@@ -731,13 +751,12 @@ elif menu == "📂 Backlog Operacional (Fixa)":
     df = load_table("backlog_fixa")
 
     if df.empty:
-        st.warning("Nenhuma base Fixa encontrada na nuvem. Faça o upload na primeira aba.")
+        st.warning("Nenhuma base Fixa/FMMT encontrada na nuvem. Faça o upload na primeira aba.")
     else:
         for c in ["DWDM", "ANEL_ABERTO", "IS_B2B", "IS_CRC", "QUADRANTE"]:
             if c not in df.columns: df[c] = "NÃO"
         if "ORIGEM" not in df.columns: df["ORIGEM"] = "FMT"
 
-        # Coluna AGING removida da exibição e substituída estritamente pelo DOWNTIME real
         cols_backlog = ["TSK", "EVENTO", "END_ID", "NE_ID", "TEMPO_DO_CHAMADO", "FALHA", "STATUS", "OBS", "RESUMO", "TECNICO", "DWDM", "ANEL_ABERTO", "IS_CRC", "QUADRANTE", "ORIGEM"]
         for c in cols_backlog:
             if c not in df.columns: df[c] = ""
@@ -751,7 +770,7 @@ elif menu == "📂 Backlog Operacional (Fixa)":
             st_opts = ["Todos"] + sorted(list(df_bk_view["STATUS"].dropna().unique()))
             sel_st = st.selectbox("Status Específico:", options=st_opts, key="bk_status")
         with r1_c3:
-            origem_opts = ["Todas", "FMT"]
+            origem_opts = ["Todas", "FMT", "FMMT"]
             sel_origem = st.selectbox("Origem (Base):", options=origem_opts, key="bk_origem")
         with r1_c4:
             busca_bk = st.text_input("🔍 Busca rápida:", key="bk_busca")
@@ -821,8 +840,8 @@ elif menu == "📂 Backlog Operacional (Fixa)":
         with col_b2:
             output = io.BytesIO()
             with pd.ExcelWriter(output, engine="openpyxl") as writer:
-                df_bk_view[cols_backlog].to_excel(writer, index=False, sheet_name="Backlog_Fixa")
-            st.download_button("📥 Baixar Backlog Fixa em Excel (.xlsx)", data=output.getvalue(), file_name=f"Backlog_Fixa_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+                df_bk_view[cols_backlog].to_excel(writer, index=False, sheet_name="Backlog_Fixa_FMMT")
+            st.download_button("📥 Baixar Backlog Unificado em Excel (.xlsx)", data=output.getvalue(), file_name=f"Backlog_Unificado_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
 # ==========================================
 # ABA 5: BACKLOG MÓVEL
@@ -926,7 +945,7 @@ elif menu == "📱 Backlog Móvel":
 # ==========================================
 elif menu == "🔄 Handover (Entrantes/Saintes)":
     st.title("🔄 Handover Operacional")
-    st.caption("Acompanhe o que entrou de novo e o que saiu do seu backlog da Fixa desde a última atualização da base.")
+    st.caption("Acompanhe o que entrou de novo e o que saiu do seu backlog desde a última atualização da base.")
 
     df_new = load_table("backlog_fixa")
     df_old = load_table("backlog_fixa_previous")
@@ -1124,7 +1143,7 @@ elif menu == "📺 Apresentação Executiva":
     df_hist = load_table("historico_diario")
 
     if df.empty:
-        st.warning("Nenhuma base Fixa carregada na nuvem.")
+        st.warning("Nenhuma base carregada na nuvem.")
     else:
         for c in ["DWDM", "ANEL_ABERTO", "IS_B2B", "IS_CRC", "QUADRANTE"]:
             if c not in df.columns: df[c] = "NÃO"
@@ -1213,7 +1232,7 @@ elif menu == "📺 Apresentação Executiva":
                 if sel_tab != "Todos":
                     df_show = df_show[df_show["STATUS"] == sel_tab]
                     
-                cols_show = [c for c in ["TSK", "TEMPO_DO_CHAMADO", "ANEL_ABERTO", "DWDM", "NE_ID", "QUADRANTE", "STATUS", "RESUMO", "TECNICO"] if c in df_show.columns]
+                cols_show = [c for c in ["TSK", "TEMPO_DO_CHAMADO", "ANEL_ABERTO", "DWDM", "NE_ID", "QUADRANTE", "STATUS", "RESUMO", "TECNICO", "ORIGEM"] if c in df_show.columns]
                 
                 if not df_show.empty:
                     st.dataframe(apply_colors(df_show[cols_show]), use_container_width=True, hide_index=True)
@@ -1331,7 +1350,7 @@ elif menu == "🚨 Casos Críticos":
 # ABA 10: BASE GERAL FMT
 # ==========================================
 elif menu == "📋 Base Geral FMT":
-    st.title("📋 Base Geral de Equipamentos FMT")
+    st.title("📋 Base Geral de Equipamentos FMT & FMMT")
     df = load_table("backlog_fixa")
 
     if df.empty:
