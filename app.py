@@ -153,7 +153,7 @@ def verify_login(username, password):
     return False, False
 
 def apply_colors(df):
-    def style_aging(val):
+    def style_downtime(val):
         s = str(val).strip().lower()
         if not s or s in ['nan', 'none', '-']: return ''
         
@@ -180,9 +180,9 @@ def apply_colors(df):
 
     try:
         styler = df.style
-        for col in ['AGING', 'aging', 'TEMPO_DO_CHAMADO']:
+        for col in ['TEMPO_DO_CHAMADO', 'tempo_do_chamado']:
             if col in df.columns:
-                styler = styler.map(style_aging, subset=[col]) if hasattr(styler, 'map') else styler.applymap(style_aging, subset=[col])
+                styler = styler.map(style_downtime, subset=[col]) if hasattr(styler, 'map') else styler.applymap(style_downtime, subset=[col])
         return styler
     except:
         return df
@@ -249,19 +249,18 @@ def upsert_crc(df_crc):
     col_ne = next((c for c in cols if "NE" in c), cols[min(1, len(cols)-1)])
     col_end = next((c for c in cols if "END" in c), cols[min(2, len(cols)-1)])
     col_status = next((c for c in cols if "STATUS" in c), cols[min(3, len(cols)-1)])
-    col_aging = next((c for c in cols if "AGING" in c), None)
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     with engine.connect() as conn:
         for _, row in df_crc.iterrows():
             tsk_val = str(row.get(col_tsk, "")).strip()
             if not tsk_val or tsk_val.lower() in ["nan", "none", ""]: continue
             ne_val = str(row.get(col_ne, "")); end_val = str(row.get(col_end, ""))
-            st_val = str(row.get(col_status, "")); aging_val = str(row.get(col_aging, "")) if col_aging else ""
+            st_val = str(row.get(col_status, ""))
             exists = conn.execute(text("SELECT tsk FROM crc_historico WHERE tsk = :t"), {"t": tsk_val}).fetchone()
             if exists:
-                conn.execute(text("""UPDATE crc_historico SET ne_id=:n, end_id=:e, status=:s, aging=:a, data_atualizacao=:d WHERE tsk=:t"""), {"n": ne_val, "e": end_val, "s": st_val, "a": aging_val, "d": now, "t": tsk_val})
+                conn.execute(text("""UPDATE crc_historico SET ne_id=:n, end_id=:e, status=:s, data_atualizacao=:d WHERE tsk=:t"""), {"n": ne_val, "e": end_val, "s": st_val, "d": now, "t": tsk_val})
             else:
-                conn.execute(text("""INSERT INTO crc_historico (tsk, ne_id, end_id, status, aging, descricao, data_atualizacao) VALUES (:t, :n, :e, :s, :a, '', :d)"""), {"t": tsk_val, "n": ne_val, "e": end_val, "s": st_val, "a": aging_val, "d": now})
+                conn.execute(text("""INSERT INTO crc_historico (tsk, ne_id, end_id, status, aging, descricao, data_atualizacao) VALUES (:t, :n, :e, :s, '', '', :d)"""), {"t": tsk_val, "n": ne_val, "e": end_val, "s": st_val, "d": now})
         conn.commit()
 
 @st.cache_data(ttl=900, show_spinner=False)
@@ -328,7 +327,7 @@ def extrair_colunas(df):
         return {
             "TSK": pd.Series(dtype=str), "EVENTO": pd.Series(dtype=str), "END_ID": pd.Series(dtype=str), 
             "NE_ID": pd.Series(dtype=str), "TIPO_EQUIPAMENTO": pd.Series(dtype=str), "STATUS": pd.Series(dtype=str), 
-            "FALHA": pd.Series(dtype=str), "AGING": pd.Series(dtype=str), "DATA_CRIACAO": pd.Series(dtype=str), 
+            "FALHA": pd.Series(dtype=str), "DATA_CRIACAO": pd.Series(dtype=str), 
             "TECNICO": pd.Series(dtype=str), "RESUMO": pd.Series(dtype=str), "OBS": pd.Series(dtype=str)
         }
     
@@ -344,7 +343,6 @@ def extrair_colunas(df):
         "TIPO_EQUIPAMENTO": get_single_series(df, ["TIPO DO EQUIPAMENTO", "TIPO NE", "EQUIPAMENTO", "FAMILIA"], ""),
         "STATUS": get_single_series(df, ["STATUS", "SITUAÇÃO"], "Não Acionado"),
         "FALHA": get_single_series(df, ["ALARME", "FALHA"], ""),
-        "AGING": get_single_series(df, ["AGING", "TEMPO", "SLA"], "-"),
         "DATA_CRIACAO": get_single_series(df, ["DATA DE CRIAÇÃO", "DATA_CRIACAO", "CRIA", "ABERTURA"], ""),
         "TECNICO": get_single_series(df, ["NOME DO TÉCNICO", "NOME TÉCNICO CAMPO", "TÉCNICO", "TECNICO", "RESPONSÁVEL"], ""),
         "RESUMO": get_single_series(df, ["RESUMO", "OBSERVAÇÕES"], ""),
@@ -372,12 +370,12 @@ def get_status_counts(sub_df, status_col="STATUS"):
     }
 
 def calculate_tempo_chamado(row):
-    """Calcula o tempo do chamado estritamente com base na Data de Criação em relação a hoje."""
+    """Calcula o tempo real do chamado comparando a Data de Criação com a data e hora atual (agora)."""
     data_cria = row.get("DATA_CRIACAO", None)
     
     if pd.notnull(data_cria) and str(data_cria).strip() not in ["", "nan", "None", "-"]:
         try:
-            # Tenta converter explicitamente priorizando o padrão brasileiro (dia/mês/ano)
+            # Tenta converter explicitamente priorizando o formato brasileiro (dia/mês/ano)
             dt = pd.to_datetime(data_cria, dayfirst=True, errors='coerce')
             if pd.isnull(dt):
                 dt = pd.to_datetime(data_cria, errors='coerce')
@@ -393,7 +391,6 @@ def calculate_tempo_chamado(row):
         except: 
             pass
             
-    # Fallback caso a data esteja vazia ou inválida
     return "0d 00h"
 
 # ==========================================
@@ -521,7 +518,7 @@ elif menu == "📥 Upload & Processamento":
         if not f_fmt:
             st.error("A Base Total Fixa FMT é obrigatória.")
         else:
-            with st.spinner("Processando e calculando o tempo dos chamados em relação a hoje..."):
+            with st.spinner("Processando e calculando o tempo real dos chamados..."):
                 st.cache_data.clear() 
                 
                 df_old_fixa = load_table("backlog_fixa")
@@ -569,7 +566,7 @@ elif menu == "📥 Upload & Processamento":
                 df_fmt["QUADRANTE"] = df_fmt["END_ID"].astype(str).str.strip().str.upper().map(quad_map)
                 df_fmt["QUADRANTE"] = df_fmt["QUADRANTE"].fillna(df_fmt["END_ID"].astype(str).apply(lambda x: re.search(r'(QD\s*\d+|ANF\s*\d+)', str(x), re.IGNORECASE).group(0).upper() if re.search(r'(QD\s*\d+|ANF\s*\d+)', str(x), re.IGNORECASE) else "NÃO INFORMADO"))
                 
-                # CÁLCULO DE TEMPO DO CHAMADO BASEADO ESTRITAMENTE NA DATA DE CRIAÇÃO VS HOJE
+                # CÁLCULO DE TEMPO DO CHAMADO BASEADO EXCLUSIVAMENTE NA DATA DE CRIAÇÃO VS HOJE
                 df_fmt["TEMPO_DO_CHAMADO"] = df_fmt.apply(calculate_tempo_chamado, axis=1)
 
                 if not df_old_fixa.empty:
@@ -642,7 +639,6 @@ elif menu == "📥 Upload & Processamento":
                     s_b2b_ne = get_single_series(df_b2b_raw, ["NE ID DO EVENTO", "NE ID", "NENAME"], "")
                     s_b2b_status = get_single_series(df_b2b_raw, ["STATUS"], "Não Acionado")
                     s_b2b_falha = get_single_series(df_b2b_raw, ["ALARME", "FALHA"], "")
-                    s_b2b_aging = get_single_series(df_b2b_raw, ["AGING"], "-")
                     s_b2b_cria = get_single_series(df_b2b_raw, ["DATA DE CRIAÇÃO", "DATA_CRIACAO", "CRIA"], "")
                     s_b2b_tec = get_single_series(df_b2b_raw, ["NOME DO TÉCNICO", "NOME TÉCNICO CAMPO", "TÉCNICO", "TECNICO"], "")
                     s_b2b_res = get_single_series(df_b2b_raw, ["RESUMO", "OBSERVAÇÕES"], "")
@@ -650,7 +646,7 @@ elif menu == "📥 Upload & Processamento":
                     s_b2b_grupo = get_single_series(df_b2b_raw, ["GRUPO ACIONADO", "GRUPO_ACIONADO", "GRUPO"], "NÃO INFORMADO")
                     
                     df_b2b_proc = pd.DataFrame({
-                        "TSK": s_b2b_tsk, "END_ID": s_b2b_end, "NE_ID": s_b2b_ne, "FALHA": s_b2b_falha, "AGING": s_b2b_aging, "DATA_CRIACAO": s_b2b_cria,
+                        "TSK": s_b2b_tsk, "END_ID": s_b2b_end, "NE_ID": s_b2b_ne, "FALHA": s_b2b_falha, "DATA_CRIACAO": s_b2b_cria,
                         "STATUS": s_b2b_status.apply(categorize_status), "RESUMO": s_b2b_res.apply(lambda r: "Em Campo" if "CAMPO" in str(r).upper() else ("Tramitado" if "TRAMITADO" in str(r).upper() else ("Encerrado" if "ENCERRADO" in str(r).upper() else str(r)))),
                         "TECNICO": s_b2b_tec, "OBS": s_b2b_obs, "GRUPO_ACIONADO": s_b2b_grupo
                     })
@@ -691,14 +687,13 @@ elif menu == "📥 Upload & Processamento":
                     s_ne_m = get_single_series(df_movel_raw, ["NE ID DO EVENTO", "NE ID", "NENAME"], "")
                     s_status_m = get_single_series(df_movel_raw, ["STATUS"], "Não Acionado")
                     s_falha_m = get_single_series(df_movel_raw, ["ALARME", "FALHA"], "")
-                    s_aging_m = get_single_series(df_movel_raw, ["AGING"], "-")
                     s_cria_m = get_single_series(df_movel_raw, ["DATA DE CRIAÇÃO", "DATA_CRIACAO", "CRIA"], "")
                     s_tec_m = get_single_series(df_movel_raw, ["NOME DO TÉCNICO", "NOME TÉCNICO CAMPO", "TÉCNICO", "TECNICO", "RESPONSÁVEL"], "")
                     s_resumo_m = get_single_series(df_movel_raw, ["RESUMO", "OBSERVAÇÕES"], "")
                     s_obs_m = get_single_series(df_movel_raw, ["OBS", "NOTAS"], "")
 
                     df_movel = pd.DataFrame({
-                        "TSK": s_tsk_m, "END_ID": s_end_m, "NE_ID": s_ne_m, "FALHA": s_falha_m, "AGING": s_aging_m, "DATA_CRIACAO": s_cria_m,
+                        "TSK": s_tsk_m, "END_ID": s_end_m, "NE_ID": s_ne_m, "FALHA": s_falha_m, "DATA_CRIACAO": s_cria_m,
                         "STATUS": s_status_m.apply(categorize_status), "RESUMO": s_resumo_m.apply(lambda r: "Em Campo" if "CAMPO" in str(r).upper() else ("Tramitado" if "TRAMITADO" in str(r).upper() else ("Encerrado" if "ENCERRADO" in str(r).upper() else str(r)))),
                         "TECNICO": s_tec_m, "OBS": s_obs_m
                     })
@@ -742,7 +737,8 @@ elif menu == "📂 Backlog Operacional (Fixa)":
             if c not in df.columns: df[c] = "NÃO"
         if "ORIGEM" not in df.columns: df["ORIGEM"] = "FMT"
 
-        cols_backlog = ["TSK", "EVENTO", "END_ID", "NE_ID", "TEMPO_DO_CHAMADO", "AGING", "FALHA", "STATUS", "OBS", "RESUMO", "TECNICO", "DWDM", "ANEL_ABERTO", "IS_CRC", "QUADRANTE", "ORIGEM"]
+        # Coluna AGING removida da exibição e substituída estritamente pelo DOWNTIME real
+        cols_backlog = ["TSK", "EVENTO", "END_ID", "NE_ID", "TEMPO_DO_CHAMADO", "FALHA", "STATUS", "OBS", "RESUMO", "TECNICO", "DWDM", "ANEL_ABERTO", "IS_CRC", "QUADRANTE", "ORIGEM"]
         for c in cols_backlog:
             if c not in df.columns: df[c] = ""
 
@@ -787,7 +783,6 @@ elif menu == "📂 Backlog Operacional (Fixa)":
             "END_ID": st.column_config.TextColumn("END ID", disabled=True),
             "NE_ID": st.column_config.TextColumn("NE ID", disabled=True),
             "TEMPO_DO_CHAMADO": st.column_config.TextColumn("DOWNTIME", disabled=True),
-            "AGING": st.column_config.TextColumn("AGING", disabled=True),
             "FALHA": st.column_config.TextColumn("FALHA", disabled=True),
             "STATUS": st.column_config.SelectboxColumn("Status", options=["Iniciado", "Acionado", "Encerrado", "Tramitado", "Não Acionado"], required=True),
             "OBS": st.column_config.TextColumn("Obs.:", width="large"),
@@ -857,7 +852,7 @@ elif menu == "📱 Backlog Móvel":
 
         st.divider()
 
-        cols_movel = ["TSK", "END_ID", "QUADRANTE", "NE_ID", "TEMPO_DO_CHAMADO", "AGING", "FALHA", "STATUS", "OBS", "RESUMO", "TECNICO"]
+        cols_movel = ["TSK", "END_ID", "QUADRANTE", "NE_ID", "TEMPO_DO_CHAMADO", "FALHA", "STATUS", "OBS", "RESUMO", "TECNICO"]
         for c in cols_movel:
             if c not in df_movel.columns: df_movel[c] = ""
 
@@ -890,7 +885,6 @@ elif menu == "📱 Backlog Móvel":
             "QUADRANTE": st.column_config.TextColumn("QDRs", disabled=True),
             "NE_ID": st.column_config.TextColumn("NE ID", disabled=True),
             "TEMPO_DO_CHAMADO": st.column_config.TextColumn("Tempo Chamado", disabled=True),
-            "AGING": st.column_config.TextColumn("Aging", disabled=True),
             "FALHA": st.column_config.TextColumn("Falha", disabled=True),
             "STATUS": st.column_config.SelectboxColumn("Status", options=["Iniciado", "Acionado", "Encerrado", "Tramitado", "Não Acionado"], required=True),
             "RESUMO": st.column_config.SelectboxColumn("Resumo", options=["Em Campo", "Tramitado", "Encerrado", "Em Análise", "Acionado", "Outros"]),
@@ -986,7 +980,7 @@ elif menu == "🔄 Handover (Entrantes/Saintes)":
         with t1:
             st.subheader(f"🟢 Chamados Entrantes ({len(df_entrantes)})")
             if not df_entrantes.empty:
-                cols_show = ["TSK", "END_ID", "NE_ID", "QUADRANTE", "FALHA", "AGING", "STATUS"]
+                cols_show = ["TSK", "END_ID", "NE_ID", "QUADRANTE", "FALHA", "TEMPO_DO_CHAMADO", "STATUS"]
                 cols_show = [c for c in cols_show if c in df_entrantes.columns]
                 st.dataframe(apply_colors(df_entrantes[cols_show]), use_container_width=True)
             else:
@@ -1030,7 +1024,7 @@ elif menu == "💼 Gestão B2B":
 
         st.divider()
 
-        cols_b2b = ["TSK", "TEMPO_DO_CHAMADO", "QUADRANTE", "GRUPO_ACIONADO", "NE_ID", "END_ID", "FALHA", "STATUS", "RESUMO", "TECNICO", "OBS", "AGING"]
+        cols_b2b = ["TSK", "TEMPO_DO_CHAMADO", "QUADRANTE", "GRUPO_ACIONADO", "NE_ID", "END_ID", "FALHA", "STATUS", "RESUMO", "TECNICO", "OBS"]
         for c in cols_b2b:
             if c not in df_b2b.columns: df_b2b[c] = ""
 
@@ -1087,7 +1081,6 @@ elif menu == "💼 Gestão B2B":
             "RESUMO": st.column_config.SelectboxColumn("Resumo", options=["Em Campo", "Tramitado", "Encerrado", "Em Análise", "Acionado", "Outros"]),
             "TECNICO": st.column_config.TextColumn("Técnico Responsável"),
             "OBS": st.column_config.TextColumn("Observações / Trâmites", width="large"),
-            "AGING": st.column_config.TextColumn("Aging", disabled=True),
         }
 
         edited_b2b = st.data_editor(apply_colors(df_b2b_view[cols_b2b]), column_config=column_config_b2b, use_container_width=True, height=500, key="b2b_editor_unique")
@@ -1160,39 +1153,6 @@ elif menu == "📺 Apresentação Executiva":
 
         st.divider()
 
-        st.subheader("⏳ Filtro Operacional por Aging")
-        col_ag1, _ = st.columns([1, 2])
-        aging_options = ["Todos"] + sorted(list(df["AGING"].dropna().astype(str).unique()))
-        selected_aging = col_ag1.selectbox("Selecione a faixa de Aging para detalhamento:", options=aging_options)
-        
-        df_view = df if selected_aging == "Todos" else df[df["AGING"].astype(str) == selected_aging]
-        st.write("")
-
-        st.markdown("### 📍 Visão Geográfica Global (Chamados por Quadrante)")
-        if "QUADRANTE" in df_view.columns and not df_view.empty:
-            quad_counts_all = df_view["QUADRANTE"].value_counts().reset_index()
-            quad_counts_all.columns = ["Quadrante", "Qtde Chamados"]
-            
-            if not quad_counts_all.empty:
-                c_geo1, c_geo2 = st.columns([2, 1])
-                with c_geo1:
-                    st.caption("Top 10 Quadrantes Impactados (Gráfico)")
-                    chart_global = alt.Chart(quad_counts_all.head(10)).mark_bar(color="#F59E0B").encode(
-                        y=alt.Y('Quadrante:N', sort='-x', title=""),
-                        x=alt.X('Qtde Chamados:Q', title=""),
-                        tooltip=['Quadrante', 'Qtde Chamados']
-                    ).properties(height=250)
-                    st.altair_chart(chart_global, use_container_width=True)
-                with c_geo2:
-                    st.caption("Quantidade Completa por Quadrante")
-                    st.dataframe(quad_counts_all, use_container_width=True, hide_index=True, height=250)
-            else:
-                st.info("Nenhum quadrante mapeado para os chamados nesta faixa de Aging.")
-        else:
-            st.info("Dados de quadrante indisponíveis para este filtro.")
-            
-        st.divider()
-
         def render_presentation_card(title, emoji, sub_df, color_theme):
             with st.container(border=True):
                 st.markdown(f"<h3 style='color: {color_theme};'>{emoji} {title}</h3>", unsafe_allow_html=True)
@@ -1253,7 +1213,7 @@ elif menu == "📺 Apresentação Executiva":
                 if sel_tab != "Todos":
                     df_show = df_show[df_show["STATUS"] == sel_tab]
                     
-                cols_show = [c for c in ["TSK", "TEMPO_DO_CHAMADO", "ANEL_ABERTO", "DWDM", "NE_ID", "QUADRANTE", "STATUS", "RESUMO", "TECNICO", "AGING"] if c in df_show.columns]
+                cols_show = [c for c in ["TSK", "TEMPO_DO_CHAMADO", "ANEL_ABERTO", "DWDM", "NE_ID", "QUADRANTE", "STATUS", "RESUMO", "TECNICO"] if c in df_show.columns]
                 
                 if not df_show.empty:
                     st.dataframe(apply_colors(df_show[cols_show]), use_container_width=True, hide_index=True)
@@ -1263,15 +1223,15 @@ elif menu == "📺 Apresentação Executiva":
             st.write("")
 
         # 1. Anéis Abertos
-        df_aneis = df_view[df_view["ANEL_ABERTO"] == "SIM"]
+        df_aneis = df[df["ANEL_ABERTO"] == "SIM"]
         render_presentation_card("Anéis Abertos (Alto Impacto)", "🚨", df_aneis, "#DC2626")
 
         # 2. DWDM
-        df_dwdm = df_view[df_view["DWDM"] == "SIM"]
+        df_dwdm = df[df["DWDM"] == "SIM"]
         render_presentation_card("Equipamentos DWDM (Alta Capacidade)", "🟣", df_dwdm, "#7C3AED")
 
         # 3. B2B Separado por Fixa e Móvel
-        df_b2b_view = df_view[df_view["IS_B2B"] == "SIM"]
+        df_b2b_view = df[df["IS_B2B"] == "SIM"]
         
         def is_fixa(val):
             v = str(val).strip().upper()
@@ -1289,7 +1249,7 @@ elif menu == "📺 Apresentação Executiva":
         render_presentation_card("B2B Móvel (Corporativo)", "📱", df_b2b_movel, "#2563EB")
 
         # 4. CRC
-        df_crc_view = df_view[df_view["IS_CRC"] == "SIM"]
+        df_crc_view = df[df["IS_CRC"] == "SIM"]
         render_presentation_card("Casos com Histórico CRC", "🟢", df_crc_view, "#16A34A")
 
 # ==========================================
@@ -1432,7 +1392,7 @@ elif menu == "🗄️ Histórico CRC":
         if sel_end_id != "Todos":
             df_crc_view = df_crc_view[df_crc_view["end_id"].astype(str) == sel_end_id]
 
-        for c in ["tsk", "ne_id", "end_id", "status", "aging", "descricao", "data_atualizacao"]:
+        for c in ["tsk", "ne_id", "end_id", "status", "descricao", "data_atualizacao"]:
             if c not in df_crc_view.columns:
                 df_crc_view[c] = ""
         
@@ -1443,13 +1403,12 @@ elif menu == "🗄️ Histórico CRC":
             "ne_id": st.column_config.TextColumn("NE ID", disabled=True),
             "end_id": st.column_config.SelectboxColumn("END ID / Equipe", options=end_id_col_opts),
             "status": st.column_config.SelectboxColumn("Status", options=["Acionado", "Iniciado", "Tramitado", "Encerrado", "Não Acionado"]),
-            "aging": st.column_config.TextColumn("Aging", disabled=True),
             "descricao": st.column_config.TextColumn("Descrição", width="large"),
             "data_atualizacao": st.column_config.TextColumn("Última Atualização", disabled=True)
         }
 
         edited_crc = st.data_editor(
-            apply_colors(df_crc_view[["tsk", "ne_id", "end_id", "status", "aging", "descricao", "data_atualizacao"]]), 
+            apply_colors(df_crc_view[["tsk", "ne_id", "end_id", "status", "descricao", "data_atualizacao"]]), 
             column_config=col_cfg_crc, 
             use_container_width=True, 
             height=500, 
