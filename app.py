@@ -7,6 +7,8 @@ import io
 import os
 import altair as alt
 from datetime import datetime
+import base64
+import time
 
 # ==========================================
 # 1. CONFIGURAÇÃO DA PÁGINA E CSS
@@ -24,6 +26,8 @@ if 'username' not in st.session_state:
     st.session_state['username'] = ''
 if 'is_admin' not in st.session_state:
     st.session_state['is_admin'] = False
+if 'session_expired' not in st.session_state:
+    st.session_state['session_expired'] = False
 
 # ==========================================
 # 2. CONEXÃO COM O BANCO EM NUVEM E ROTINAS
@@ -188,29 +192,84 @@ def apply_colors(df):
         return df
 
 if not st.session_state['logged_in']:
-    st.markdown("<h1 style='text-align: center; color: #1E3A8A;'>📡 NOC FMT Login</h1>", unsafe_allow_html=True)
-    st.markdown("---")
+    bg_img = ""
+    try:
+        with engine.connect() as conn:
+            res_bg = conn.execute(text("SELECT value FROM system_config WHERE key='login_bg'")).fetchone()
+            if res_bg: bg_img = res_bg[0]
+    except: pass
+
+    if bg_img:
+        st.markdown(f"""
+        <style>
+        .stApp {{
+            background-image: url("data:image/png;base64,{bg_img}");
+            background-size: cover;
+            background-position: center;
+        }}
+        [data-testid="stForm"] {{
+            background: rgba(255, 255, 255, 0.95);
+            padding: 2rem;
+            border-radius: 10px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        }}
+        [data-testid="stExpander"] {{
+            background: rgba(255, 255, 255, 0.95);
+            border-radius: 10px;
+        }}
+        </style>
+        """, unsafe_allow_html=True)
+
+    st.markdown("<h1 style='text-align: center; color: #1E3A8A;'>📡 NOC FMT</h1>", unsafe_allow_html=True)
+    st.markdown("<h4 style='text-align: center; color: #64748B; margin-bottom: 30px;'>Painel de Gestão e Monitoramento de Rede</h4>", unsafe_allow_html=True)
     
-    col_l1, col_l2, col_l3 = st.columns([1, 1, 1])
-    with col_l2:
+    if st.session_state.get('session_expired', False):
+        st.warning("⚠️ Sua sessão expirou. Por favor, faça login novamente.")
+        st.session_state['session_expired'] = False
+
+    col_info, col_login = st.columns([1.2, 1])
+    
+    with col_info:
+        with st.expander("📢 Quadro de Avisos (Release Notes)", expanded=True):
+            st.markdown("""
+            **Últimas Atualizações:**
+            * 🟢 Filtro isolado para Agregadores (RMAG/RNAG) ativado.
+            * 🔄 Handover Automático operando com sucesso.
+            * 📊 Fusão FMT + FMMT aprimorada.
+            * 🎨 Nova interface de autenticação.
+            """)
+        
+        try:
+            with engine.connect() as conn:
+                res_fixa = conn.execute(text("SELECT COUNT(*) FROM backlog_fixa")).scalar()
+            if res_fixa and res_fixa > 0:
+                st.info(f"📊 **Monitoramento Ativo:** O NOC está atuando em **{res_fixa}** chamados críticos no momento.")
+        except: pass
+
+    with col_login:
         with st.form("login_form"):
-            st.write("Insira suas credenciais corporativas")
-            user_input = st.text_input("Usuário")
-            pass_input = st.text_input("Senha", type="password")
+            user_input = st.text_input("Usuário", placeholder="nome.sobrenome")
+            pass_input = st.text_input("Senha", type="password", placeholder="••••••••")
             submitted = st.form_submit_button("Entrar no Sistema", use_container_width=True)
             
             if submitted:
                 if not user_input or not pass_input:
-                    st.warning("Preencha todos os campos.")
+                    st.toast("Preencha todos os campos para prosseguir.", icon="⚠️")
                 else:
-                    auth_ok, is_admin = verify_login(user_input, pass_input)
-                    if auth_ok:
-                        st.session_state['logged_in'] = True
-                        st.session_state['username'] = user_input
-                        st.session_state['is_admin'] = is_admin
-                        st.rerun()
-                    else:
-                        st.error("Usuário ou senha incorretos.")
+                    with st.spinner("Autenticando credenciais corporativas..."):
+                        time.sleep(0.8)
+                        auth_ok, is_admin = verify_login(user_input, pass_input)
+                        if auth_ok:
+                            st.session_state['logged_in'] = True
+                            st.session_state['username'] = user_input
+                            st.session_state['is_admin'] = is_admin
+                            st.rerun()
+                        else:
+                            st.toast("Usuário ou senha incorretos. Tente novamente.", icon="❌")
+        
+        st.link_button("🎧 Solicitar Acesso / Suporte ao Plantão", "msteams:/l/chat/0/0?users=victor.henrique@tqi.com.br&message=Olá,%20preciso%20de%20ajuda%20com%20meu%20login", use_container_width=True)
+
+    st.markdown("<hr style='margin-top: 60px;'><p style='text-align: center; color: gray; font-size: 13px;'>Command Center NOC FMT © 2026<br>Desenvolvido por <b>Victor Henrique de Oliveira</b></p>", unsafe_allow_html=True)
     st.stop()
 
 # ==========================================
@@ -370,7 +429,6 @@ def get_status_counts(sub_df, status_col="STATUS"):
     }
 
 def calculate_tempo_chamado(row):
-    """Calcula o tempo real do chamado comparando a Data de Criação com a data e hora atual (agora)."""
     data_cria = row.get("DATA_CRIACAO", None)
     
     if pd.notnull(data_cria) and str(data_cria).strip() not in ["", "nan", "None", "-"]:
@@ -396,10 +454,21 @@ def calculate_tempo_chamado(row):
 # 6. MENUS DA BARRA LATERAL
 # ==========================================
 st.sidebar.title(f"📡 NOC FMT")
-st.sidebar.markdown(f"**Usuário Logado:** `{st.session_state['username']}`")
+
+hora_atual = datetime.now().hour
+if 5 <= hora_atual < 12:
+    saudacao = "Bom dia"
+elif 12 <= hora_atual < 18:
+    saudacao = "Boa tarde"
+else:
+    saudacao = "Boa noite"
+
+st.sidebar.success(f"👋 {saudacao}, **{st.session_state['username']}**! Bom trabalho.")
+
 if st.sidebar.button("Sair (Logout)"):
     st.session_state['logged_in'] = False
     st.session_state['is_admin'] = False
+    st.session_state['session_expired'] = True
     st.rerun()
 
 st.sidebar.markdown("---")
@@ -420,7 +489,7 @@ if st.session_state['is_admin']: abas_disponiveis.insert(0, "👤 Gestão de Usu
 menu = st.sidebar.radio("Navegação", abas_disponiveis)
 
 # ==========================================
-# ABA: GESTÃO DE USUÁRIOS
+# ABA: GESTÃO DE USUÁRIOS E CUSTOMIZAÇÃO
 # ==========================================
 if menu == "👤 Gestão de Usuários (Admin)":
     st.title("👤 Gerenciamento de Acessos")
@@ -462,6 +531,21 @@ if menu == "👤 Gestão de Usuários (Admin)":
                 st.rerun()
     else:
         st.info("Nenhum usuário cadastrado no banco de dados.")
+
+    st.markdown("---")
+    st.markdown("### 🖼️ Personalização da Tela de Login")
+    st.write("Faça o upload de uma imagem (.png, .jpg) para definir como fundo oficial da tela inicial do NOC.")
+    bg_upload = st.file_uploader("Alterar Background", type=["png", "jpg", "jpeg"])
+    
+    if bg_upload is not None:
+        if st.button("Aplicar Novo Fundo", type="primary"):
+            encoded_img = base64.b64encode(bg_upload.getvalue()).decode()
+            with engine.connect() as conn:
+                conn.execute(text("DELETE FROM system_config WHERE key='login_bg'"))
+                conn.execute(text("INSERT INTO system_config (key, value) VALUES ('login_bg', :v)"), {"v": encoded_img})
+                conn.commit()
+            st.success("Background atualizado! Deslogue para conferir.")
+            st.balloons()
 
 # ==========================================
 # ABA: UPLOAD & PROCESSAMENTO
@@ -532,7 +616,6 @@ elif menu == "📥 Upload & Processamento":
                 
                 df_fmt_raw = load_file(f_fmt, ["BACKLOG", "FMT", "TASK", "EVENTO"])
                 
-                # PROCESSAMENTO DA FMMT (Móvel / Anéis)
                 if f_fmmt:
                     df_fmmt_raw = load_file(f_fmmt, ["FMMT", "MOVEL", "SMART"])
                     if not df_fmmt_raw.empty: 
@@ -554,7 +637,6 @@ elif menu == "📥 Upload & Processamento":
 
                 quad_map = get_quadrantes_map()
                 
-                # 1. PROCESSAMENTO DA FIXA (FMT)
                 df_fmt = pd.DataFrame(extrair_colunas(df_fmt_raw))
                 df_fmt["ORIGEM"] = "FMT"
                 
@@ -571,7 +653,6 @@ elif menu == "📥 Upload & Processamento":
                 
                 df_fmt["TEMPO_DO_CHAMADO"] = df_fmt.apply(calculate_tempo_chamado, axis=1)
 
-                # 2. SE HOUVER BASE FMMT (MÓVEL/ANÉIS), FAZ A FUSÃO UNIFICADA NA FIXA
                 if f_fmmt:
                     df_fmmt_processed = load_file(f_fmmt, ["FMMT", "MOVEL", "SMART"])
                     if not df_fmmt_processed.empty:
@@ -796,7 +877,6 @@ elif menu == "📂 Backlog Operacional (Fixa)":
         if sel_dwdm != "Todos": df_bk_view = df_bk_view[df_bk_view["DWDM"] == sel_dwdm]
         if sel_quad != "Todos": df_bk_view = df_bk_view[df_bk_view["QUADRANTE"] == sel_quad]
         
-        # Filtro de agregadores (RMAG/RNAG)
         if sel_agreg == "Somente RMAG/RNAG":
             df_bk_view = df_bk_view[df_bk_view["NE_ID"].astype(str).str.upper().str.startswith(("RMAG", "RNAG"), na=False)]
         elif sel_agreg == "Ocultar RMAG/RNAG":
@@ -907,7 +987,6 @@ elif menu == "📱 Backlog Móvel":
         if sel_movel_st != "Todos": df_movel_view = df_movel_view[df_movel_view["STATUS"] == sel_movel_st]
         if sel_movel_quad != "Todos": df_movel_view = df_movel_view[df_movel_view["QUADRANTE"] == sel_movel_quad]
         
-        # Filtro de agregadores
         if sel_agreg_m == "Somente RMAG/RNAG":
             df_movel_view = df_movel_view[df_movel_view["NE_ID"].astype(str).str.upper().str.startswith(("RMAG", "RNAG"), na=False)]
         elif sel_agreg_m == "Ocultar RMAG/RNAG":
@@ -1096,7 +1175,6 @@ elif menu == "💼 Gestão B2B":
         if sel_b2b_quad != "Todos": df_b2b_view = df_b2b_view[df_b2b_view["QUADRANTE"] == sel_b2b_quad]
         if sel_b2b_grupo != "Todos": df_b2b_view = df_b2b_view[df_b2b_view["GRUPO_ACIONADO"] == sel_b2b_grupo]
         
-        # Filtro de agregadores para o B2B
         if sel_agreg_b2b == "Somente RMAG/RNAG":
             df_b2b_view = df_b2b_view[df_b2b_view["NE_ID"].astype(str).str.upper().str.startswith(("RMAG", "RNAG"), na=False)]
         elif sel_agreg_b2b == "Ocultar RMAG/RNAG":
