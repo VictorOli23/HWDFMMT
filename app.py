@@ -244,27 +244,35 @@ if not st.session_state['logged_in']:
     
     with col_info:
         b2b_pendentes, aneis_qtd, dwdm_qtd = 0, 0, 0
+        tem_dados = False
         try:
             with engine.connect() as conn:
                 df_b2b_t = pd.read_sql_table('backlog_b2b', conn)
-                if not df_b2b_t.empty and "STATUS" in df_b2b_t.columns:
-                    b2b_pendentes = df_b2b_t[~df_b2b_t["STATUS"].isin(["Tramitado", "Encerrado"])].shape[0]
+                if not df_b2b_t.empty:
+                    df_b2b_t.columns = [str(c).upper() for c in df_b2b_t.columns]
+                    if "STATUS" in df_b2b_t.columns:
+                        b2b_pendentes = df_b2b_t[~df_b2b_t["STATUS"].isin(["TRAMITADO", "ENCERRADO"])].shape[0]
                 
                 df_fixa_t = pd.read_sql_table('backlog_fixa', conn)
                 if not df_fixa_t.empty:
+                    df_fixa_t.columns = [str(c).upper() for c in df_fixa_t.columns]
+                    tem_dados = True
                     if "ANEL_ABERTO" in df_fixa_t.columns:
                         aneis_qtd = (df_fixa_t["ANEL_ABERTO"] == "SIM").sum()
                     if "DWDM" in df_fixa_t.columns:
                         dwdm_qtd = (df_fixa_t["DWDM"] == "SIM").sum()
-        except: pass
+        except: 
+            tem_dados = False
 
         with st.expander("📢 Quadro de Avisos & Indicadores do Plantão", expanded=True):
-            st.markdown("### 📊 Status Atual da Operação")
-            
-            mc1, mc2, mc3 = st.columns(3)
-            mc1.metric("🏢 B2B Pendentes", b2b_pendentes)
-            mc2.metric("🚨 Anéis Abertos", aneis_qtd)
-            mc3.metric("🟣 DWDM Ativos", dwdm_qtd)
+            if tem_dados and (b2b_pendentes > 0 or aneis_qtd > 0 or dwdm_qtd > 0):
+                st.markdown("### 📊 Status Atual da Operação")
+                mc1, mc2, mc3 = st.columns(3)
+                mc1.metric("🏢 B2B Pendentes", b2b_pendentes)
+                mc2.metric("🚨 Anéis Abertos", aneis_qtd)
+                mc3.metric("🟣 DWDM Ativos", dwdm_qtd)
+            else:
+                st.info("📥 **Nenhuma base processada no momento.**\nFaça login como Administrador para enviar as planilhas na aba *Upload & Processamento*.")
             
             st.markdown("---")
             st.markdown("""
