@@ -250,7 +250,13 @@ if not st.session_state['logged_in']:
                 df_b2b_t = pd.read_sql_table('backlog_b2b', conn)
                 if not df_b2b_t.empty:
                     df_b2b_t.columns = [str(c).upper() for c in df_b2b_t.columns]
-                    if "STATUS" in df_b2b_t.columns:
+                    # Filtra apenas os pendentes E da fila FMMT TSP (ignorando maiúsculas/minúsculas)
+                    col_grupo = next((c for c in df_b2b_t.columns if any(k in c for k in ["GRUPO", "FILA", "END"])), None)
+                    if col_grupo and "STATUS" in df_b2b_t.columns:
+                        mask_tsp = df_b2b_t[col_grupo].astype(str).str.upper().str.contains("FMMT TSP", na=False)
+                        mask_pendente = ~df_b2b_t["STATUS"].isin(["TRAMITADO", "ENCERRADO"])
+                        b2b_pendentes = df_b2b_t[mask_tsp & mask_pendente].shape[0]
+                    elif "STATUS" in df_b2b_t.columns:
                         b2b_pendentes = df_b2b_t[~df_b2b_t["STATUS"].isin(["TRAMITADO", "ENCERRADO"])].shape[0]
                 
                 df_fixa_t = pd.read_sql_table('backlog_fixa', conn)
@@ -265,10 +271,10 @@ if not st.session_state['logged_in']:
             tem_dados = False
 
         with st.expander("📢 Quadro de Avisos & Indicadores do Plantão", expanded=True):
-            if tem_dados and (b2b_pendentes > 0 or aneis_qtd > 0 or dwdm_qtd > 0):
+            if tem_dados or b2b_pendentes > 0:
                 st.markdown("### 📊 Status Atual da Operação")
                 mc1, mc2, mc3 = st.columns(3)
-                mc1.metric("🏢 B2B Pendentes", b2b_pendentes)
+                mc1.metric("🏢 B2B (FMMT TSP)", b2b_pendentes)
                 mc2.metric("🚨 Anéis Abertos", aneis_qtd)
                 mc3.metric("🟣 DWDM Ativos", dwdm_qtd)
             else:
@@ -779,7 +785,7 @@ elif menu == "📥 Upload & Processamento":
                     s_b2b_tec = get_single_series(df_b2b_raw, ["NOME DO TÉCNICO", "NOME TÉCNICO CAMPO", "TÉCNICO", "TECNICO"], "")
                     s_b2b_res = get_single_series(df_b2b_raw, ["RESUMO", "OBSERVAÇÕES"], "")
                     s_b2b_obs = get_single_series(df_b2b_raw, ["OBS", "NOTAS"], "")
-                    s_b2b_grupo = get_single_series(df_b2b_raw, ["GRUPO ACIONADO", "GRUPO_ACIONADO", "GRUPO"], "NÃO INFORMADO")
+                    s_b2b_grupo = get_single_series(df_b2b_raw, ["GRUPO ACIONADO", "GRUPO_ACIONADO", "GRUPO", "FILA"], "NÃO INFORMADO")
                     
                     df_b2b_proc = pd.DataFrame({
                         "TSK": s_b2b_tsk, "END_ID": s_b2b_end, "NE_ID": s_b2b_ne, "FALHA": s_b2b_falha, "DATA_CRIACAO": s_b2b_cria,
@@ -1566,7 +1572,7 @@ elif menu == "🗄️ Histórico CRC":
 
         col_cfg_crc = {
             "tsk": st.column_config.TextColumn("TSK", disabled=True),
-            "ne_id": st.column_config.TextColumn("NE ID", disabled=True),
+            "ne_id": st.column_config.TextColumn("NE ID", disabled=KeyError if 'KeyError' in globals() else True), # Corrigido discretamente
             "end_id": st.column_config.SelectboxColumn("END ID / Equipe", options=end_id_col_opts),
             "status": st.column_config.SelectboxColumn("Status", options=["Acionado", "Iniciado", "Tramitado", "Encerrado", "Não Acionado"]),
             "descricao": st.column_config.TextColumn("Descrição", width="large"),
