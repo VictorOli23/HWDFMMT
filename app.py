@@ -69,20 +69,16 @@ def init_cloud_db():
                 data_atualizacao VARCHAR(50)
             )
         """))
-        # Aqui alteramos a criação para TEXT caso a tabela seja recriada no futuro
         conn.execute(text("""
             CREATE TABLE IF NOT EXISTS system_config (
                 key VARCHAR(50) PRIMARY KEY,
                 value TEXT
             )
         """))
-        
-        # --- FORÇA A CORREÇÃO NO BANCO DE DADOS JÁ EXISTENTE (Neon/PostgreSQL) ---
         try:
             conn.execute(text("ALTER TABLE system_config ALTER COLUMN value TYPE TEXT"))
         except:
-            pass # Ignora o erro se a coluna já tiver sido alterada antes
-            
+            pass
         conn.commit()
 
 init_cloud_db()
@@ -207,29 +203,38 @@ if not st.session_state['logged_in']:
             if res_bg: bg_img = res_bg[0]
     except: pass
 
-    if bg_img:
-        st.markdown(f"""
-        <style>
-        .stApp {{
-            background-image: url("data:image/png;base64,{bg_img}");
-            background-size: cover;
-            background-position: center;
-        }}
-        [data-testid="stForm"] {{
-            background: rgba(255, 255, 255, 0.95);
-            padding: 2rem;
-            border-radius: 10px;
-            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
-        }}
-        [data-testid="stExpander"] {{
-            background: rgba(255, 255, 255, 0.95);
-            border-radius: 10px;
-        }}
-        </style>
-        """, unsafe_allow_html=True)
+    st.markdown(f"""
+    <style>
+    .stApp {{
+        background-image: url("data:image/png;base64,{bg_img}");
+        background-size: cover;
+        background-position: center;
+        background-attachment: fixed;
+    }}
+    [data-testid="stForm"] {{
+        background: rgba(15, 23, 42, 0.85) !important;
+        padding: 2rem;
+        border-radius: 12px;
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37);
+    }}
+    [data-testid="stExpander"] {{
+        background: rgba(15, 23, 42, 0.85) !important;
+        border-radius: 12px;
+        border: 1px solid rgba(255, 255, 255, 0.1);
+    }}
+    [data-testid="stExpander"] summary p, [data-testid="stExpander"] div {{
+        color: #F8FAFC !important;
+    }}
+    label {{
+        color: #F8FAFC !important;
+        font-weight: 500;
+    }}
+    </style>
+    """, unsafe_allow_html=True)
 
-    st.markdown("<h1 style='text-align: center; color: #1E3A8A;'>📡 NOC FMT</h1>", unsafe_allow_html=True)
-    st.markdown("<h4 style='text-align: center; color: #64748B; margin-bottom: 30px;'>Painel de Gestão e Monitoramento de Rede</h4>", unsafe_allow_html=True)
+    st.markdown("<h1 style='text-align: center; color: #FFFFFF; text-shadow: 0 2px 4px rgba(0,0,0,0.5);'>📡 NOC FMT</h1>", unsafe_allow_html=True)
+    st.markdown("<h4 style='text-align: center; color: #CBD5E1; margin-bottom: 30px; text-shadow: 0 1px 2px rgba(0,0,0,0.5);'>Painel de Gestão e Monitoramento de Rede</h4>", unsafe_allow_html=True)
     
     if st.session_state.get('session_expired', False):
         st.warning("⚠️ Sua sessão expirou. Por favor, faça login novamente.")
@@ -238,21 +243,36 @@ if not st.session_state['logged_in']:
     col_info, col_login = st.columns([1.2, 1])
     
     with col_info:
-        with st.expander("📢 Quadro de Avisos (Release Notes)", expanded=True):
-            st.markdown("""
-            **Últimas Atualizações:**
-            * 🟢 Filtro isolado para Agregadores (RMAG/RNAG) ativado.
-            * 🔄 Handover Automático operando com sucesso.
-            * 📊 Fusão FMT + FMMT aprimorada.
-            * 🎨 Nova interface de autenticação.
-            """)
-        
+        b2b_pendentes, aneis_qtd, dwdm_qtd = 0, 0, 0
         try:
             with engine.connect() as conn:
-                res_fixa = conn.execute(text("SELECT COUNT(*) FROM backlog_fixa")).scalar()
-            if res_fixa and res_fixa > 0:
-                st.info(f"📊 **Monitoramento Ativo:** O NOC está atuando em **{res_fixa}** chamados críticos no momento.")
+                df_b2b_t = pd.read_sql_table('backlog_b2b', conn)
+                if not df_b2b_t.empty and "STATUS" in df_b2b_t.columns:
+                    b2b_pendentes = df_b2b_t[~df_b2b_t["STATUS"].isin(["Tramitado", "Encerrado"])].shape[0]
+                
+                df_fixa_t = pd.read_sql_table('backlog_fixa', conn)
+                if not df_fixa_t.empty:
+                    if "ANEL_ABERTO" in df_fixa_t.columns:
+                        aneis_qtd = (df_fixa_t["ANEL_ABERTO"] == "SIM").sum()
+                    if "DWDM" in df_fixa_t.columns:
+                        dwdm_qtd = (df_fixa_t["DWDM"] == "SIM").sum()
         except: pass
+
+        with st.expander("📢 Quadro de Avisos & Indicadores do Plantão", expanded=True):
+            st.markdown("### 📊 Status Atual da Operação")
+            
+            mc1, mc2, mc3 = st.columns(3)
+            mc1.metric("🏢 B2B Pendentes", b2b_pendentes)
+            mc2.metric("🚨 Anéis Abertos", aneis_qtd)
+            mc3.metric("🟣 DWDM Ativos", dwdm_qtd)
+            
+            st.markdown("---")
+            st.markdown("""
+            **Atualizações Recentes:**
+            * 🟢 Filtro isolado para Agregadores (RMAG/RNAG) ativo.
+            * 🔄 Handover Automático operando com sucesso.
+            * 🎨 Nova interface corporativa com tema imersivo.
+            """)
 
     with col_login:
         with st.form("login_form"):
@@ -277,7 +297,7 @@ if not st.session_state['logged_in']:
         
         st.link_button("🎧 Solicitar Acesso / Suporte ao Plantão", "msteams:/l/chat/0/0?users=victor.henrique@tqi.com.br&message=Olá,%20preciso%20de%20ajuda%20com%20meu%20login", use_container_width=True)
 
-    st.markdown("<hr style='margin-top: 60px;'><p style='text-align: center; color: gray; font-size: 13px;'>Command Center NOC FMT © 2026<br>Desenvolvido por <b>Victor Henrique de Oliveira</b></p>", unsafe_allow_html=True)
+    st.markdown("<hr style='margin-top: 60px; border-color: rgba(255,255,255,0.2);'><p style='text-align: center; color: #94A3B8; font-size: 13px;'>Command Center NOC FMT © 2026<br>Desenvolvido por <b>Victor Henrique de Oliveira</b></p>", unsafe_allow_html=True)
     st.stop()
 
 # ==========================================
