@@ -250,14 +250,11 @@ if not st.session_state['logged_in']:
                 df_b2b_t = pd.read_sql_table('backlog_b2b', conn)
                 if not df_b2b_t.empty:
                     df_b2b_t.columns = [str(c).upper() for c in df_b2b_t.columns]
-                    # Filtra apenas os pendentes E da fila FMMT TSP (ignorando maiúsculas/minúsculas)
-                    col_grupo = next((c for c in df_b2b_t.columns if any(k in c for k in ["GRUPO", "FILA", "END"])), None)
-                    if col_grupo and "STATUS" in df_b2b_t.columns:
-                        mask_tsp = df_b2b_t[col_grupo].astype(str).str.upper().str.contains("FMMT TSP", na=False)
+                    # Filtra estritamente por GRUPO_ACIONADO contendo "CAMPO FMMT TSP" e pendentes
+                    if "GRUPO_ACIONADO" in df_b2b_t.columns and "STATUS" in df_b2b_t.columns:
+                        mask_tsp = df_b2b_t["GRUPO_ACIONADO"].astype(str).str.upper().str.contains("CAMPO FMMT TSP", na=False)
                         mask_pendente = ~df_b2b_t["STATUS"].isin(["TRAMITADO", "ENCERRADO"])
                         b2b_pendentes = df_b2b_t[mask_tsp & mask_pendente].shape[0]
-                    elif "STATUS" in df_b2b_t.columns:
-                        b2b_pendentes = df_b2b_t[~df_b2b_t["STATUS"].isin(["TRAMITADO", "ENCERRADO"])].shape[0]
                 
                 df_fixa_t = pd.read_sql_table('backlog_fixa', conn)
                 if not df_fixa_t.empty:
@@ -274,7 +271,7 @@ if not st.session_state['logged_in']:
             if tem_dados or b2b_pendentes > 0:
                 st.markdown("### 📊 Status Atual da Operação")
                 mc1, mc2, mc3 = st.columns(3)
-                mc1.metric("🏢 B2B (FMMT TSP)", b2b_pendentes)
+                mc1.metric("🏢 B2B (CAMPO FMMT TSP)", b2b_pendentes)
                 mc2.metric("🚨 Anéis Abertos", aneis_qtd)
                 mc3.metric("🟣 DWDM Ativos", dwdm_qtd)
             else:
@@ -809,12 +806,18 @@ elif menu == "📥 Upload & Processamento":
 
                     df_b2b_proc.to_sql('backlog_b2b', engine, if_exists='replace', index=False)
 
-                    b2b_tokens = set(df_b2b_proc["TSK"].dropna().astype(str).str.strip().str.upper()).union(set(df_b2b_proc["NE_ID"].dropna().astype(str).str.strip().str.upper()))
+                    # Filtra estritamente os B2B que pertencem ao grupo CAMPO FMMT TSP
+                    b2b_tsp = df_b2b_proc[df_b2b_proc["GRUPO_ACIONADO"].astype(str).str.upper().str.contains("CAMPO FMMT TSP", na=False)]
+                    b2b_tokens = set(b2b_tsp["TSK"].dropna().astype(str).str.strip().str.upper()).union(set(b2b_tsp["NE_ID"].dropna().astype(str).str.strip().str.upper()))
                     df_fmt["IS_B2B"] = df_fmt.apply(lambda r: "SIM" if str(r["TSK"]).upper() in b2b_tokens or str(r["NE_ID"]).upper() in b2b_tokens else "NÃO", axis=1)
                 else:
                     df_b2b_cloud = load_table("backlog_b2b")
                     if not df_b2b_cloud.empty:
-                        b2b_tokens = set(df_b2b_cloud["TSK"].dropna().astype(str).str.strip().str.upper()).union(set(df_b2b_cloud["NE_ID"].dropna().astype(str).str.strip().str.upper()))
+                        if "GRUPO_ACIONADO" in df_b2b_cloud.columns:
+                            b2b_tsp = df_b2b_cloud[df_b2b_cloud["GRUPO_ACIONADO"].astype(str).str.upper().str.contains("CAMPO FMMT TSP", na=False)]
+                        else:
+                            b2b_tsp = df_b2b_cloud
+                        b2b_tokens = set(b2b_tsp["TSK"].dropna().astype(str).str.strip().str.upper()).union(set(b2b_tsp["NE_ID"].dropna().astype(str).str.strip().str.upper()))
                         df_fmt["IS_B2B"] = df_fmt.apply(lambda r: "SIM" if str(r["TSK"]).upper() in b2b_tokens or str(r["NE_ID"]).upper() in b2b_tokens else "NÃO", axis=1)
 
                 df_fmt.to_sql('backlog_fixa', engine, if_exists='replace', index=False)
@@ -1285,6 +1288,7 @@ elif menu == "📺 Apresentação Executiva":
     
     df = load_table("backlog_fixa")
     df_old = load_table("backlog_fixa_previous")
+    df_b2b_exec = load_table("backlog_b2b")
     df_hist = load_table("historico_diario")
 
     if df.empty:
@@ -1293,12 +1297,26 @@ elif menu == "📺 Apresentação Executiva":
         for c in ["DWDM", "ANEL_ABERTO", "IS_B2B", "IS_CRC", "QUADRANTE"]:
             if c not in df.columns: df[c] = "NÃO"
 
+        # Garante que na Apresentação Executiva o B2B considere estritamente CAMPO FMMT TSP
+        if not df_b2b_exec.empty:
+            df_b2b_exec.columns = [str(col).upper() for col in df_b2b_exec.columns]
+            if "GRUPO_ACIONADO" in df_b2b_exec.columns:
+                mask_exec_tsp = df_b2b_exec["GRUPO_ACIONADO"].astype(str).str.upper().str.contains("CAMPO FMMT TSP", na=False)
+                df_b2b_tsp_exec = df_b2b_exec[mask_exec_tsp]
+            else:
+                df_b2b_tsp_exec = df_b2b_exec
+            
+            b2b_tsp_tokens = set(df_b2b_tsp_exec["TSK"].dropna().astype(str).str.strip().str.upper()).union(set(df_b2b_tsp_exec["NE_ID"].dropna().astype(str).str.strip().str.upper()))
+            df["IS_B2B_TSP"] = df.apply(lambda r: "SIM" if str(r["TSK"]).upper() in b2b_tsp_tokens or str(r["NE_ID"]).upper() in b2b_tokens_fallback(r, b2b_tsp_tokens) else "NÃO", axis=1) # type: ignore
+        else:
+            df["IS_B2B_TSP"] = "NÃO"
+
         st.markdown("### 🌐 Resumo Global da Operação")
         cg1, cg2, cg3, cg4 = st.columns(4)
         cg1.metric("Total de Eventos Ativos", len(df))
         cg2.metric("Anéis Abertos (Crítico)", (df["ANEL_ABERTO"] == "SIM").sum())
         cg3.metric("Equipamentos DWDM", (df["DWDM"] == "SIM").sum())
-        cg4.metric("Atenção B2B", (df["IS_B2B"] == "SIM").sum())
+        cg4.metric("B2B (CAMPO FMMT TSP)", (df["IS_B2B_TSP"] == "SIM").sum())
 
         st.divider()
 
@@ -1386,6 +1404,9 @@ elif menu == "📺 Apresentação Executiva":
 
             st.write("")
 
+        def b2b_tsp_tokens(r, tokens): # auxiliar inline
+            return tokens
+
         # 1. Anéis Abertos
         df_aneis = df[df["ANEL_ABERTO"] == "SIM"]
         render_presentation_card("Anéis Abertos (Alto Impacto)", "🚨", df_aneis, "#DC2626")
@@ -1394,8 +1415,8 @@ elif menu == "📺 Apresentação Executiva":
         df_dwdm = df[df["DWDM"] == "SIM"]
         render_presentation_card("Equipamentos DWDM (Alta Capacidade)", "🟣", df_dwdm, "#7C3AED")
 
-        # 3. B2B Separado por Fixa e Móvel
-        df_b2b_view = df[df["IS_B2B"] == "SIM"]
+        # 3. B2B TSP Separado por Fixa e Móvel
+        df_b2b_view = df[df["IS_B2B_TSP"] == "SIM"]
         
         def is_fixa(val):
             v = str(val).strip().upper()
@@ -1409,8 +1430,8 @@ elif menu == "📺 Apresentação Executiva":
             df_b2b_fixa = pd.DataFrame(columns=df_b2b_view.columns)
             df_b2b_movel = pd.DataFrame(columns=df_b2b_view.columns)
 
-        render_presentation_card("B2B Fixa (Corporativo)", "🏢", df_b2b_fixa, "#0284C7")
-        render_presentation_card("B2B Móvel (Corporativo)", "📱", df_b2b_movel, "#2563EB")
+        render_presentation_card("B2B Fixa (CAMPO FMMT TSP)", "🏢", df_b2b_fixa, "#0284C7")
+        render_presentation_card("B2B Móvel (CAMPO FMMT TSP)", "📱", df_b2b_movel, "#2563EB")
 
         # 4. CRC
         df_crc_view = df[df["IS_CRC"] == "SIM"]
@@ -1572,7 +1593,7 @@ elif menu == "🗄️ Histórico CRC":
 
         col_cfg_crc = {
             "tsk": st.column_config.TextColumn("TSK", disabled=True),
-            "ne_id": st.column_config.TextColumn("NE ID", disabled=KeyError if 'KeyError' in globals() else True), # Corrigido discretamente
+            "ne_id": st.column_config.TextColumn("NE ID", disabled=True),
             "end_id": st.column_config.SelectboxColumn("END ID / Equipe", options=end_id_col_opts),
             "status": st.column_config.SelectboxColumn("Status", options=["Acionado", "Iniciado", "Tramitado", "Encerrado", "Não Acionado"]),
             "descricao": st.column_config.TextColumn("Descrição", width="large"),
@@ -1634,5 +1655,5 @@ elif menu == "📅 Histórico Diário (Dias)":
         
         output = io.BytesIO()
         with pd.ExcelWriter(output, engine="openpyxl") as writer:
-            df_view.to_excel(writer, index=False, sheet_name=f"Fixa_{selected_dia}")
+            df_view.to_excel(output, index=False, sheet_name=f"Fixa_{selected_dia}")
         st.download_button("📥 Baixar Relatório do Dia em Excel", data=output.getvalue(), file_name=f"Backlog_Fixa_Historico_{selected_dia}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
