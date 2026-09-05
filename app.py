@@ -69,12 +69,20 @@ def init_cloud_db():
                 data_atualizacao VARCHAR(50)
             )
         """))
+        # Aqui alteramos a criação para TEXT caso a tabela seja recriada no futuro
         conn.execute(text("""
             CREATE TABLE IF NOT EXISTS system_config (
                 key VARCHAR(50) PRIMARY KEY,
-                value VARCHAR(50)
+                value TEXT
             )
         """))
+        
+        # --- FORÇA A CORREÇÃO NO BANCO DE DADOS JÁ EXISTENTE (Neon/PostgreSQL) ---
+        try:
+            conn.execute(text("ALTER TABLE system_config ALTER COLUMN value TYPE TEXT"))
+        except:
+            pass # Ignora o erro se a coluna já tiver sido alterada antes
+            
         conn.commit()
 
 init_cloud_db()
