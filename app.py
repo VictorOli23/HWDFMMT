@@ -188,7 +188,7 @@ def apply_colors(df):
         return df
 
 if not st.session_state['logged_in']:
-    st.markdown("<h1 style='text-align: center; color: #1E3A8A;s'>📡 NOC FMT Login</h1>", unsafe_allow_html=True)
+    st.markdown("<h1 style='text-align: center; color: #1E3A8A;'>📡 NOC FMT Login</h1>", unsafe_allow_html=True)
     st.markdown("---")
     
     col_l1, col_l2, col_l3 = st.columns([1, 1, 1])
@@ -585,7 +585,6 @@ elif menu == "📥 Upload & Processamento":
                         df_fmmt_ext["QUADRANTE"] = df_fmmt_ext["QUADRANTE"].fillna(df_fmmt_ext["END_ID"].astype(str).apply(lambda x: re.search(r'(QD\s*\d+|ANF\s*\d+)', str(x), re.IGNORECASE).group(0).upper() if re.search(r'(QD\s*\d+|ANF\s*\d+)', str(x), re.IGNORECASE) else "NÃO INFORMADO"))
                         df_fmmt_ext["TEMPO_DO_CHAMADO"] = df_fmmt_ext.apply(calculate_tempo_chamado, axis=1)
                         
-                        # Concatena sem duplicar TSKs
                         df_fmt = pd.concat([df_fmt, df_fmmt_ext], ignore_index=True)
                         df_fmt = df_fmt.drop_duplicates(subset=["TSK"], keep='first')
 
@@ -783,6 +782,8 @@ elif menu == "📂 Backlog Operacional (Fixa)":
         with r2_c3:
             quad_opts = ["Todos"] + sorted([str(x) for x in df_bk_view["QUADRANTE"].dropna().unique()])
             sel_quad = st.selectbox("Quadrante:", options=quad_opts, key="bk_quad")
+        with r2_c4:
+            sel_agreg = st.selectbox("Agregadores:", ["Todos", "Somente RMAG/RNAG", "Ocultar RMAG/RNAG"], key="bk_agreg")
 
         if sel_cat == "Fila (Pendentes)":
             df_bk_view = df_bk_view[df_bk_view["STATUS"].isin(["Não Acionado", "Acionado", "Iniciado"])]
@@ -794,6 +795,13 @@ elif menu == "📂 Backlog Operacional (Fixa)":
         if sel_anel != "Todos": df_bk_view = df_bk_view[df_bk_view["ANEL_ABERTO"] == sel_anel]
         if sel_dwdm != "Todos": df_bk_view = df_bk_view[df_bk_view["DWDM"] == sel_dwdm]
         if sel_quad != "Todos": df_bk_view = df_bk_view[df_bk_view["QUADRANTE"] == sel_quad]
+        
+        # Filtro de agregadores (RMAG/RNAG)
+        if sel_agreg == "Somente RMAG/RNAG":
+            df_bk_view = df_bk_view[df_bk_view["NE_ID"].astype(str).str.upper().str.startswith(("RMAG", "RNAG"), na=False)]
+        elif sel_agreg == "Ocultar RMAG/RNAG":
+            df_bk_view = df_bk_view[~df_bk_view["NE_ID"].astype(str).str.upper().str.startswith(("RMAG", "RNAG"), na=False)]
+            
         if busca_bk: df_bk_view = df_bk_view[df_bk_view.astype(str).apply(lambda row: row.str.contains(busca_bk, case=False).any(), axis=1)]
 
         column_config = {
@@ -877,7 +885,7 @@ elif menu == "📱 Backlog Móvel":
 
         df_movel_view = df_movel.loc[:, ~df_movel.columns.duplicated()].copy()
 
-        c_m1, c_m2, c_m3, c_m4 = st.columns(4)
+        c_m1, c_m2, c_m3, c_m4, c_m5 = st.columns(5)
         with c_m1:
             sel_cat_m = st.selectbox("Categoria (Fila/Sainte):", ["Todas", "Fila (Pendentes)", "Saintes (Concluídos)"], key="mv_cat")
         with c_m2:
@@ -885,8 +893,10 @@ elif menu == "📱 Backlog Móvel":
             sel_movel_st = st.selectbox("Status Específico:", options=st_movel_opts, key="mv_st")
         with c_m3:
             quad_opts_m = ["Todos"] + sorted([str(x) for x in df_movel_view["QUADRANTE"].dropna().unique()])
-            sel_movel_quad = st.selectbox("Filtrar Quadrante:", options=quad_opts_m, key="mv_quad")
+            sel_movel_quad = st.selectbox("Quadrante:", options=quad_opts_m, key="mv_quad")
         with c_m4:
+            sel_agreg_m = st.selectbox("Agregadores:", ["Todos", "Somente RMAG/RNAG", "Ocultar RMAG/RNAG"], key="mv_agreg")
+        with c_m5:
             busca_movel = st.text_input("🔍 Busca Móvel:", key="mv_busca")
 
         if sel_cat_m == "Fila (Pendentes)":
@@ -896,6 +906,13 @@ elif menu == "📱 Backlog Móvel":
 
         if sel_movel_st != "Todos": df_movel_view = df_movel_view[df_movel_view["STATUS"] == sel_movel_st]
         if sel_movel_quad != "Todos": df_movel_view = df_movel_view[df_movel_view["QUADRANTE"] == sel_movel_quad]
+        
+        # Filtro de agregadores
+        if sel_agreg_m == "Somente RMAG/RNAG":
+            df_movel_view = df_movel_view[df_movel_view["NE_ID"].astype(str).str.upper().str.startswith(("RMAG", "RNAG"), na=False)]
+        elif sel_agreg_m == "Ocultar RMAG/RNAG":
+            df_movel_view = df_movel_view[~df_movel_view["NE_ID"].astype(str).str.upper().str.startswith(("RMAG", "RNAG"), na=False)]
+            
         if busca_movel: df_movel_view = df_movel_view[df_movel_view.astype(str).apply(lambda row: row.str.contains(busca_movel, case=False).any(), axis=1)]
 
         column_config_movel = {
@@ -1061,11 +1078,13 @@ elif menu == "💼 Gestão B2B":
         with c_b4:
             sel_b2b_rede = st.selectbox("Rede:", options=["Todas", "Fixa", "Móvel"], key="b2b_rede")
 
-        c_b5, c_b6 = st.columns([1, 3])
+        c_b5, c_b6, c_b7 = st.columns([1, 1, 2])
         with c_b5:
             grupo_opts = ["Todos"] + sorted(list(df_b2b_view["GRUPO_ACIONADO"].dropna().unique()))
             sel_b2b_grupo = st.selectbox("Grupo Acionado:", options=grupo_opts, key="b2b_grupo")
         with c_b6:
+            sel_agreg_b2b = st.selectbox("Agregadores:", ["Todos", "Somente RMAG/RNAG", "Ocultar RMAG/RNAG"], key="b2b_agreg")
+        with c_b7:
             busca_b2b = st.text_input("🔍 Busca B2B (Número / TSK, NE ID, Falha, Técnico):", key="b2b_busca")
 
         if sel_cat_b == "Fila (Pendentes)":
@@ -1077,6 +1096,12 @@ elif menu == "💼 Gestão B2B":
         if sel_b2b_quad != "Todos": df_b2b_view = df_b2b_view[df_b2b_view["QUADRANTE"] == sel_b2b_quad]
         if sel_b2b_grupo != "Todos": df_b2b_view = df_b2b_view[df_b2b_view["GRUPO_ACIONADO"] == sel_b2b_grupo]
         
+        # Filtro de agregadores para o B2B
+        if sel_agreg_b2b == "Somente RMAG/RNAG":
+            df_b2b_view = df_b2b_view[df_b2b_view["NE_ID"].astype(str).str.upper().str.startswith(("RMAG", "RNAG"), na=False)]
+        elif sel_agreg_b2b == "Ocultar RMAG/RNAG":
+            df_b2b_view = df_b2b_view[~df_b2b_view["NE_ID"].astype(str).str.upper().str.startswith(("RMAG", "RNAG"), na=False)]
+
         def is_fixa(val):
             v = str(val).strip().upper()
             return v in ["", "NAN", "NONE", "NULL", "-"]
@@ -1356,7 +1381,7 @@ elif menu == "📋 Base Geral FMT":
     if df.empty:
         st.info("Nenhuma base carregada na nuvem.")
     else:
-        col_f1, col_f2, col_f3 = st.columns(3)
+        col_f1, col_f2, col_f3, col_f4 = st.columns(4)
         with col_f1:
             if "QUADRANTE" in df.columns:
                 quad_opts = sorted([str(x) for x in df["QUADRANTE"].dropna().unique()])
@@ -1367,6 +1392,8 @@ elif menu == "📋 Base Geral FMT":
             st_opts = sorted([str(x) for x in df["STATUS"].dropna().unique()])
             status_filter = st.multiselect("Filtrar Status:", options=st_opts)
         with col_f3:
+            agreg_filter = st.selectbox("Agregadores:", ["Todos", "Somente RMAG/RNAG", "Ocultar RMAG/RNAG"])
+        with col_f4:
             busca = st.text_input("🔍 Busca por TSK / Número, NE ID, END ID:")
 
         df_filtered = df.copy()
@@ -1374,6 +1401,12 @@ elif menu == "📋 Base Geral FMT":
             df_filtered = df_filtered[df_filtered["QUADRANTE"].isin(quad_filter)]
         if status_filter:
             df_filtered = df_filtered[df_filtered["STATUS"].isin(status_filter)]
+            
+        if agreg_filter == "Somente RMAG/RNAG":
+            df_filtered = df_filtered[df_filtered["NE_ID"].astype(str).str.upper().str.startswith(("RMAG", "RNAG"), na=False)]
+        elif agreg_filter == "Ocultar RMAG/RNAG":
+            df_filtered = df_filtered[~df_filtered["NE_ID"].astype(str).str.upper().str.startswith(("RMAG", "RNAG"), na=False)]
+            
         if busca:
             df_filtered = df_filtered[df_filtered.astype(str).apply(lambda row: row.str.contains(busca, case=False).any(), axis=1)]
 
