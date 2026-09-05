@@ -1307,7 +1307,7 @@ elif menu == "📺 Apresentação Executiva":
                 df_b2b_tsp_exec = df_b2b_exec
             
             b2b_tsp_tokens = set(df_b2b_tsp_exec["TSK"].dropna().astype(str).str.strip().str.upper()).union(set(df_b2b_tsp_exec["NE_ID"].dropna().astype(str).str.strip().str.upper()))
-            df["IS_B2B_TSP"] = df.apply(lambda r: "SIM" if str(r["TSK"]).upper() in b2b_tsp_tokens or str(r["NE_ID"]).upper() in b2b_tokens_fallback(r, b2b_tsp_tokens) else "NÃO", axis=1) # type: ignore
+            df["IS_B2B_TSP"] = df.apply(lambda r: "SIM" if str(r["TSK"]).upper() in b2b_tsp_tokens or str(r["NE_ID"]).upper() in b2b_tsp_tokens else "NÃO", axis=1)
         else:
             df["IS_B2B_TSP"] = "NÃO"
 
@@ -1403,9 +1403,6 @@ elif menu == "📺 Apresentação Executiva":
                     st.caption(f"Nenhum chamado '{sel_tab}' encontrado.")
 
             st.write("")
-
-        def b2b_tsp_tokens(r, tokens): # auxiliar inline
-            return tokens
 
         # 1. Anéis Abertos
         df_aneis = df[df["ANEL_ABERTO"] == "SIM"]
