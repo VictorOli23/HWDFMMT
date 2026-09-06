@@ -11,7 +11,6 @@ import base64
 import time
 import pydeck as pdk
 from openpyxl.worksheet.table import Table, TableStyleInfo
-import google.generativeai as genai
 
 # ==========================================
 # 1. CONFIGURAÇÃO DA PÁGINA E CSS
@@ -282,7 +281,6 @@ if not st.session_state['logged_in']:
             st.markdown("---")
             st.markdown("""
             **Atualizações Recentes:**
-            * 🤖 **Nova Aba de Causa Raiz por IA (Gemini API)** integrada.
             * 📈 **Evolução por Dia da Semana (Seg x Ter x Qua)** nos cards de Anéis e DWDM.
             * 🗺️ Mapas Interativos de Impacto e Geral ativos.
             """)
@@ -528,7 +526,6 @@ abas_disponiveis = [
     "🔄 Handover (Entrantes/Saintes)",
     "💼 Gestão B2B",
     "📺 Apresentação Executiva",
-    "🤖 Causa Raiz IA",
     "🗺️ Mapa Impacto",
     "🗺️ Mapa Geral",
     "🚨 Casos Críticos",
@@ -1627,89 +1624,6 @@ elif menu == "📺 Apresentação Executiva":
 
         df_crc_view = df[df["IS_CRC"] == "SIM"]
         render_presentation_card("Casos com Histórico CRC", "🟢", df_crc_view, "#16A34A")
-
-# ==========================================
-# ABA NOVA: CAUSA RAIZ IA (GEMINI API)
-# ==========================================
-elif menu == "🤖 Causa Raiz IA":
-    st.title("🤖 Tags Automáticas de Causa Raiz por IA (Gemini API)")
-    st.caption("Utilize Inteligência Artificial para analisar os alarmes, falhas e descrições dos chamados pendentes e gerar etiquetas automáticas de Causa Raiz e Recomendações de Ação.")
-
-    gemini_key = os.environ.get("GEMINI_API_KEY")
-    if not gemini_key:
-        try:
-            gemini_key = st.secrets["gemini"]["api_key"]
-        except:
-            gemini_key = ""
-
-    api_key_input = st.text_input("🔑 Chave da API do Gemini (Google AI Studio):", value=gemini_key, type="password", placeholder="AQ...")
-    
-    df_ai = load_table("backlog_fixa")
-    if df_ai.empty:
-        st.warning("Nenhuma base Fixa carregada na nuvem para análise.")
-    else:
-        df_ai_pendentes = df_ai[~df_ai["STATUS"].isin(["Tramitado", "Encerrado"])].copy()
-        st.info(f"📊 Foram encontrados **{len(df_ai_pendentes)} chamados pendentes** aptos para análise automática de Causa Raiz.")
-
-        if st.button("🚀 Executar Análise Inteligente de Causa Raiz", type="primary"):
-            if not api_key_input:
-                st.error("⚠️ Por favor, insira uma Chave de API válida do Gemini.")
-            else:
-                with st.spinner("🤖 Analisando alarmes e gerando tags de causa raiz via Gemini..."):
-                    try:
-                        genai.configure(api_key=api_key_input.strip())
-                        
-                        # Definindo explicitamente o modelo estável padrão atual
-                        model = genai.GenerativeModel('gemini-2.5-flash')
-                        
-                        resultados_ia = []
-                        amostra = df_ai_pendentes.head(25)
-                        
-                        for _, row in amostra.iterrows():
-                            tsk = row.get("TSK", "")
-                            ne = row.get("NE_ID", "")
-                            falha = row.get("FALHA", "")
-                            obs = row.get("OBS", "")
-                            
-                            prompt = f"""Você é um Especialista Sênior em Operações de Telecomunicações. Analise o chamado abaixo e retorne EXATAMENTE duas informações curtas separadas por barra vertical (|):
-1. Tag Principal da Causa Raiz (Ex: Falha de Hardware, Cabo Rompido, Queda de Energia, Falha de Transmissão DWDM, Configuração de Roteamento).
-2. Ação de Contorno Recomendada em até 8 palavras.
-
-Dados do Chamado:
-- TSK: {tsk}
-- Elemento (NE ID): {ne}
-- Alarme/Falha: {falha}
-- Observações: {obs}"""
-
-                            try:
-                                response = model.generate_content(prompt)
-                                texto_resp = response.text.strip()
-                                partes = texto_resp.split("|")
-                                causa = partes[0].strip() if len(partes) > 0 else "Análise Indeterminada"
-                                acao = partes[1].strip() if len(partes) > 1 else "Verificar com equipe de campo"
-                            except Exception as sub_err:
-                                causa = f"Erro IA: {str(sub_err)[:35]}"
-                                acao = "Revisar manualmente"
-
-                            resultados_ia.append({
-                                "TSK": tsk,
-                                "NE_ID": ne,
-                                "FALHA": falha,
-                                "CAUSA_RAIZ_IA": causa,
-                                "ACAO_RECOMENDADA_IA": acao
-                            })
-                        
-                        df_resultado_ia = pd.DataFrame(resultados_ia)
-                        st.success("✅ Análise de Causa Raiz concluída com sucesso usando o Gemini!")
-                        st.dataframe(df_resultado_ia, use_container_width=True, hide_index=True)
-                        
-                        output_ia = io.BytesIO()
-                        with pd.ExcelWriter(output_ia, engine="openpyxl") as writer:
-                            df_resultado_ia.to_excel(writer, index=False, sheet_name="Causa_Raiz_IA")
-                        st.download_button("📥 Baixar Relatório de Causa Raiz (Excel)", data=output_ia.getvalue(), file_name=f"Relatorio_Causa_Raiz_IA_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-
-                    except Exception as err:
-                        st.error(f"❌ Falha ao conectar com a API do Gemini: {err}")
 
 # ==========================================
 # ABA: MAPA IMPACTO (GEORREFERENCIADO - FIXA)
