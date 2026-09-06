@@ -1659,18 +1659,8 @@ elif menu == "🤖 Causa Raiz IA":
                     try:
                         genai.configure(api_key=api_key_input.strip())
                         
-                        # Descobre automaticamente um modelo compatível ativo na sua conta
-                        active_model_name = 'gemini-1.5-flash'
-                        try:
-                            for m in genai.list_models():
-                                if 'generateContent' in m.supported_generation_methods:
-                                    if 'flash' in m.name.lower():
-                                        active_model_name = m.name
-                                        break
-                        except:
-                            pass
-                        
-                        model = genai.GenerativeModel(active_model_name)
+                        # Definindo explicitamente o modelo estável padrão atual
+                        model = genai.GenerativeModel('gemini-2.5-flash')
                         
                         resultados_ia = []
                         amostra = df_ai_pendentes.head(25)
@@ -1710,7 +1700,7 @@ Dados do Chamado:
                             })
                         
                         df_resultado_ia = pd.DataFrame(resultados_ia)
-                        st.success(f"✅ Análise de Causa Raiz concluída com sucesso usando o modelo `{active_model_name}`!")
+                        st.success("✅ Análise de Causa Raiz concluída com sucesso usando o Gemini!")
                         st.dataframe(df_resultado_ia, use_container_width=True, hide_index=True)
                         
                         output_ia = io.BytesIO()
