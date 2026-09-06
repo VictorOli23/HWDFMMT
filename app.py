@@ -1665,11 +1665,9 @@ elif menu == "🤖 Causa Raiz IA":
                 with st.spinner("🤖 Analisando alarmes e gerando tags de causa raiz via Gemini..."):
                     try:
                         genai.configure(api_key=api_key_input.strip())
-                        # Configurando explicitamente para usar o gemini-1.5-flash com segurança
-                        model = genai.GenerativeModel(
-                            model_name='gemini-1.5-flash',
-                            system_instruction="Você é um Especialista Sênior em Operações de Telecomunicações e Redes Fixas / DWDM / GPON. Retorne estritamente o formato solicitado."
-                        )
+                        
+                        # Usando o modelo genérico ou o padrão atualizado para evitar erros 404
+                        model = genai.GenerativeModel('gemini-2.5-flash')
                         
                         resultados_ia = []
                         amostra = df_ai_pendentes.head(25)
@@ -1680,7 +1678,7 @@ elif menu == "🤖 Causa Raiz IA":
                             falha = row.get("FALHA", "")
                             obs = row.get("OBS", "")
                             
-                            prompt = f"""Analise o chamado abaixo e retorne EXATAMENTE duas informações curtas separadas por barra vertical (|):
+                            prompt = f"""Você é um Especialista Sênior em Operações de Telecomunicações. Analise o chamado abaixo e retorne EXATAMENTE duas informações curtas separadas por barra vertical (|):
 1. Tag Principal da Causa Raiz (Ex: Falha de Hardware, Cabo Rompido, Queda de Energia, Falha de Transmissão DWDM, Configuração de Roteamento).
 2. Ação de Contorno Recomendada em até 8 palavras.
 
@@ -1697,7 +1695,7 @@ Dados do Chamado:
                                 causa = partes[0].strip() if len(partes) > 0 else "Análise Indeterminada"
                                 acao = partes[1].strip() if len(partes) > 1 else "Verificar com equipe de campo"
                             except Exception as sub_err:
-                                causa = f"Erro IA: {str(sub_err)[:30]}"
+                                causa = f"Erro IA: {str(sub_err)[:35]}"
                                 acao = "Revisar manualmente"
 
                             resultados_ia.append({
