@@ -1356,7 +1356,6 @@ elif menu == "📺 Apresentação Executiva":
         max_row = len(df) + 1
         max_col = len(df.columns)
         
-        # Converte letras de colunas (ex: 1 -> A, 2 -> B)
         def get_col_letter(n):
             string = ""
             while n > 0:
@@ -1367,7 +1366,6 @@ elif menu == "📺 Apresentação Executiva":
         col_end_letter = get_col_letter(max_col)
         ref = f"A1:{col_end_letter}{max_row}"
         
-        # Limpa caracteres especiais do nome da tabela do Excel (sem espaços ou acentos)
         clean_tname = re.sub(r'[^a-zA-Z0-9_]', '', table_name)
         
         tab = Table(displayName=clean_tname, ref=ref)
@@ -1438,7 +1436,7 @@ elif menu == "📺 Apresentação Executiva":
                 format_as_excel_table(writer, df_res_crit, "Resumo_Criticos", "TblResumoCriticos")
                 
         if not has_data:
-            df_empty = pd.DataFrame({"Mensagem": ["Nenhum dado encontrado no banco."]j}) if 'j' not in locals() else pd.DataFrame({"Mensagem": ["Nenhum dado encontrado no banco."]});
+            df_empty = pd.DataFrame({"Mensagem": ["Nenhum dado encontrado no banco."]})
             df_empty.to_excel(writer, index=False, sheet_name="Sem_Dados")
             format_as_excel_table(writer, df_empty, "Sem_Dados", "TblSemDados")
             
