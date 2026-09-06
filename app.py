@@ -1477,7 +1477,6 @@ elif menu == "📺 Apresentação Executiva":
 
         st.divider()
 
-        # Função auxiliar para gerar gráfico de evolução Seg x Ter x Qua x ... a partir do histórico diário
         def render_evolution_chart_for_critical(sub_df, title_label, color_theme):
             st.markdown(f"**📈 Evolução Semanal de Chamados ({title_label})**")
             df_h = load_table("historico_diario")
@@ -1485,12 +1484,10 @@ elif menu == "📺 Apresentação Executiva":
                 st.info("ℹ️ O histórico diário precisa ter pelo menos 1 dia salvo para montar a evolução semanal.")
                 return
 
-            # Filtra na base histórica os itens que pertencem ao sub_df atual
             active_tsks = set(sub_df["TSK"].dropna().astype(str).str.strip())
             df_h_filtered = df_h[df_h["TSK"].astype(str).str.strip().isin(active_tsks)].copy()
             
             if df_h_filtered.empty:
-                # Se não houver histórico passado ainda, usa a data de criação atual para demonstrar
                 df_h_filtered = sub_df.copy()
                 if "DATA_CRIACAO" in df_h_filtered.columns:
                     df_h_filtered["data_snapshot"] = pd.to_datetime(df_h_filtered["DATA_CRIACAO"], errors='coerce').dt.strftime("%Y-%m-%d")
@@ -1498,14 +1495,12 @@ elif menu == "📺 Apresentação Executiva":
                     df_h_filtered["data_snapshot"] = datetime.now().strftime("%Y-%m-%d")
 
             df_h_filtered["dt_obj"] = pd.to_datetime(df_h_filtered["data_snapshot"], errors='coerce')
-            # Mapeia para os dias da semana em Português
             day_map = {0: "Segunda", 1: "Terça", 2: "Quarta", 3: "Quinta", 4: "Sexta", 5: "Sábado", 6: "Domingo"}
             df_h_filtered["Dia_Semana"] = df_h_filtered["dt_obj"].dt.weekday.map(day_map)
             
             day_order = ["Segunda", "Terça", "Quarta", "Quinta", "Sexta", "Sábado", "Domingo"]
             df_grouped = df_h_filtered.groupby("Dia_Semana").size().reset_index(name="Quantidade")
             
-            # Ordena por dia da semana
             df_grouped["Dia_Semana"] = pd.Categorical(df_grouped["Dia_Semana"], categories=day_order, ordered=True)
             df_grouped = df_grouped.sort_values("Dia_Semana").dropna()
 
@@ -1533,7 +1528,6 @@ elif menu == "📺 Apresentação Executiva":
                 st.write("---")
 
                 if is_critical_type:
-                    # Layout específico para Anéis Abertos e DWDM com a evolução Seg x Ter x Qua...
                     c_chart_ev, c_chart2 = st.columns([1.8, 1.2])
                     with c_chart_ev:
                         render_evolution_chart_for_critical(sub_df, title, color_theme)
@@ -1554,7 +1548,6 @@ elif menu == "📺 Apresentação Executiva":
                         else:
                             st.caption("Sem dados.")
                 else:
-                    # Layout padrão para os demais cards
                     c_metrics, c_chart1, c_chart2 = st.columns([1.2, 1.5, 1.5])
                     with c_metrics:
                         st.markdown("**Status Resumido:**")
@@ -1636,7 +1629,7 @@ elif menu == "📺 Apresentação Executiva":
         render_presentation_card("Casos com Histórico CRC", "🟢", df_crc_view, "#16A34A")
 
 # ==========================================
-# ABA NOVA: CAUSA RAIZ IA (GEMINI API)
+# ABA: CAUSA RAIZ IA (GEMINI API)
 # ==========================================
 elif menu == "🤖 Causa Raiz IA":
     st.title("🤖 Tags Automáticas de Causa Raiz por IA (Gemini API)")
@@ -1664,10 +1657,10 @@ elif menu == "🤖 Causa Raiz IA":
             else:
                 with st.spinner("🤖 Analisando alarmes e gerando tags de causa raiz via Gemini..."):
                     try:
-                        # Importação e inicialização utilizando o cliente moderno google-genai compatível com chaves AQ...
-                        from google import genai
+                        genai.configure(api_key=api_key_input.strip())
                         
-                        client = genai.Client(api_key=api_key_input.strip())
+                        # Usando o modelo com o prefixo completo aceito pelo endpoint v1
+                        model = genai.GenerativeModel('models/gemini-1.5-flash')
                         
                         resultados_ia = []
                         amostra = df_ai_pendentes.head(25)
@@ -1689,10 +1682,7 @@ Dados do Chamado:
 - Observações: {obs}"""
 
                             try:
-                                response = client.models.generate_content(
-                                    model='gemini-2.5-flash',
-                                    contents=prompt,
-                                )
+                                response = model.generate_content(prompt)
                                 texto_resp = response.text.strip()
                                 partes = texto_resp.split("|")
                                 causa = partes[0].strip() if len(partes) > 0 else "Análise Indeterminada"
@@ -1720,6 +1710,7 @@ Dados do Chamado:
 
                     except Exception as err:
                         st.error(f"❌ Falha ao conectar com a API do Gemini: {err}")
+
 # ==========================================
 # ABA: MAPA IMPACTO (GEORREFERENCIADO - FIXA)
 # ==========================================
@@ -1858,10 +1849,10 @@ elif menu == "🗺️ Mapa Geral":
             def get_color_fmmt(row):
                 st_val = str(row.get("STATUS")).upper()
                 if "ENCERRADO" in st_val:
-                    return [22, 163, 74, 180]  # Verde
+                    return [22, 163, 74, 180]
                 elif "INICIADO" in st_val or "ACIONADO" in st_val:
-                    return [249, 115, 22, 200]  # Laranja
-                return [37, 99, 235, 200]      # Azul padrão
+                    return [249, 115, 22, 200]
+                return [37, 99, 235, 200]
 
             df_geo_fmmt["color"] = df_geo_fmmt.apply(get_color_fmmt, axis=1)
 
@@ -1897,7 +1888,7 @@ elif menu == "🗺️ Mapa Geral":
             st.dataframe(df_geo_fmmt[cols_map_show_f], use_container_width=True, hide_index=True)
 
 # ==========================================
-# ABA NOVO: CASOS CRÍTICOS (MANUAL)
+# ABA: CASOS CRÍTICOS (MANUAL)
 # ==========================================
 elif menu == "🚨 Casos Críticos":
     st.title("🚨 Gestão de Casos Críticos")
@@ -1972,7 +1963,7 @@ elif menu == "🚨 Casos Críticos":
         st.warning("Não há dados cadastrados para gerar o e-mail com este filtro.")
 
 # ==========================================
-# ABA 10: BASE GERAL FMT
+# ABA: BASE GERAL FMT
 # ==========================================
 elif menu == "📋 Base Geral FMT":
     st.title("📋 Base Geral de Equipamentos FMT & FMMT")
@@ -2016,7 +2007,7 @@ elif menu == "📋 Base Geral FMT":
         st.download_button("📥 Baixar Base Filtrada (CSV)", data=csv, file_name="equipamentos_fmt_completo.csv", mime="text/csv")
 
 # ==========================================
-# ABA 11: HISTÓRICO CRC
+# ABA: HISTÓRICO CRC
 # ==========================================
 elif menu == "🗄️ Histórico CRC":
     st.title("🗄️ Base Cumulativa CRC")
@@ -2095,7 +2086,7 @@ elif menu == "🗄️ Histórico CRC":
                 st.rerun()
 
 # ==========================================
-# ABA 12: HISTÓRICO DIÁRIO (EOD)
+# ABA: HISTÓRICO DIÁRIO (EOD)
 # ==========================================
 elif menu == "📅 Histórico Diário (Dias)":
     st.title("📅 Histórico Diário (Snapshots)")
