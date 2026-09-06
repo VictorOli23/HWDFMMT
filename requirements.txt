@@ -5,3 +5,6 @@ SQLAlchemy
 psycopg2-binary
 bcrypt
 google-generativeai
+google-genai
+pydeck
+altair
