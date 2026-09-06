@@ -11,6 +11,7 @@ import base64
 import time
 import pydeck as pdk
 from openpyxl.worksheet.table import Table, TableStyleInfo
+import google.generativeai as genai
 
 # ==========================================
 # 1. CONFIGURAÇÃO DA PÁGINA E CSS
@@ -281,9 +282,9 @@ if not st.session_state['logged_in']:
             st.markdown("---")
             st.markdown("""
             **Atualizações Recentes:**
-            * 🗺️ Nova aba de **Mapa de Impacto (Georreferenciado)** ativa.
-            * 🟢 Tratamento de Coordenadas com apóstrofo (`'`) corrigido.
-            * 🔄 Handover Automático operando com sucesso.
+            * 🤖 **Nova Aba de Causa Raiz por IA (Gemini API)** integrada.
+            * 📈 **Evolução por Dia da Semana (Seg x Ter x Qua)** nos cards de Anéis e DWDM.
+            * 🗺️ Mapas Interativos de Impacto e Geral ativos.
             """)
 
     with col_login:
@@ -423,7 +424,6 @@ def get_single_series(df, col_name_hints, fallback_val=""):
 
 def get_single_series_numeric(df, col_name_hints, fallback_val=0.0):
     s = get_single_series(df, col_name_hints, str(fallback_val))
-    # Remove apóstrofos (' ou "), espaços extras, substitui vírgula por ponto e converte para float mantendo o sinal negativo
     cleaned = s.astype(str).str.replace(r"['\"]", "", regex=True).str.strip().str.replace(',', '.', regex=False)
     return pd.to_numeric(cleaned, errors='coerce').fillna(fallback_val)
 
@@ -528,7 +528,9 @@ abas_disponiveis = [
     "🔄 Handover (Entrantes/Saintes)",
     "💼 Gestão B2B",
     "📺 Apresentação Executiva",
+    "🤖 Causa Raiz IA",
     "🗺️ Mapa Impacto",
+    "🗺️ Mapa Geral",
     "🚨 Casos Críticos",
     "📋 Base Geral FMT",
     "🗄️ Histórico CRC",
@@ -669,13 +671,15 @@ elif menu == "📥 Upload & Processamento":
                 if f_fmmt:
                     df_fmmt_raw = load_file(f_fmmt, ["FMMT", "MOVEL", "SMART"])
                     if not df_fmmt_raw.empty: 
-                        # Processa FMMT de forma totalmente isolada para não misturar com a Fixa
                         df_fmmt_ext = pd.DataFrame(extrair_colunas(df_fmmt_raw))
                         df_fmmt_ext["ORIGEM"] = "FMMT"
                         df_fmmt_ext["DWDM"] = "NÃO"
                         df_fmmt_ext["STATUS"] = df_fmmt_ext["STATUS"].apply(categorize_status)
                         df_fmmt_ext["RESUMO"] = df_fmmt_ext["RESUMO"].apply(lambda r: "Em Campo" if "CAMPO" in str(r).upper() else ("Tramitado" if "TRAMITADO" in str(r).upper() else ("Encerrado" if "ENCERRADO" in str(r).upper() else str(r))))
                         df_fmmt_ext = df_fmmt_ext[df_fmmt_ext["TSK"].astype(str).str.strip() != ""]
+                        df_fmmt_ext["QUADRANTE"] = df_fmmt_ext["END_ID"].astype(str).str.strip().str.upper().map(get_quadrantes_map())
+                        df_fmmt_ext["QUADRANTE"] = df_fmmt_ext["QUADRANTE"].fillna(df_fmmt_ext["END_ID"].astype(str).apply(lambda x: re.search(r'(QD\s*\d+|ANF\s*\d+)', str(x), re.IGNORECASE).group(0).upper() if re.search(r'(QD\s*\d+|ANF\s*\d+)', str(x), re.IGNORECASE) else "NÃO INFORMADO"))
+                        df_fmmt_ext["TEMPO_DO_CHAMADO"] = df_fmmt_ext.apply(calculate_tempo_chamado, axis=1)
                         df_fmmt_ext = df_fmmt_ext.drop_duplicates(subset=["TSK"], keep='first')
                         df_fmmt_ext.to_sql('backlog_fmmt', engine, if_exists='replace', index=False)
 
@@ -695,7 +699,6 @@ elif menu == "📥 Upload & Processamento":
 
                 quad_map = get_quadrantes_map()
                 
-                # Processamento exclusivo da Base Fixa FMT
                 df_fmt = pd.DataFrame(extrair_colunas(df_fmt_raw))
                 df_fmt["ORIGEM"] = "FMT"
                 
@@ -1474,7 +1477,49 @@ elif menu == "📺 Apresentação Executiva":
 
         st.divider()
 
-        def render_presentation_card(title, emoji, sub_df, color_theme):
+        # Função auxiliar para gerar gráfico de evolução Seg x Ter x Qua x ... a partir do histórico diário
+        def render_evolution_chart_for_critical(sub_df, title_label, color_theme):
+            st.markdown(f"**📈 Evolução Semanal de Chamados ({title_label})**")
+            df_h = load_table("historico_diario")
+            if df_h.empty or "data_snapshot" not in df_h.columns:
+                st.info("ℹ️ O histórico diário precisa ter pelo menos 1 dia salvo para montar a evolução semanal.")
+                return
+
+            # Filtra na base histórica os itens que pertencem ao sub_df atual
+            active_tsks = set(sub_df["TSK"].dropna().astype(str).str.strip())
+            df_h_filtered = df_h[df_h["TSK"].astype(str).str.strip().isin(active_tsks)].copy()
+            
+            if df_h_filtered.empty:
+                # Se não houver histórico passado ainda, usa a data de criação atual para demonstrar
+                df_h_filtered = sub_df.copy()
+                if "DATA_CRIACAO" in df_h_filtered.columns:
+                    df_h_filtered["data_snapshot"] = pd.to_datetime(df_h_filtered["DATA_CRIACAO"], errors='coerce').dt.strftime("%Y-%m-%d")
+                else:
+                    df_h_filtered["data_snapshot"] = datetime.now().strftime("%Y-%m-%d")
+
+            df_h_filtered["dt_obj"] = pd.to_datetime(df_h_filtered["data_snapshot"], errors='coerce')
+            # Mapeia para os dias da semana em Português
+            day_map = {0: "Segunda", 1: "Terça", 2: "Quarta", 3: "Quinta", 4: "Sexta", 5: "Sábado", 6: "Domingo"}
+            df_h_filtered["Dia_Semana"] = df_h_filtered["dt_obj"].dt.weekday.map(day_map)
+            
+            day_order = ["Segunda", "Terça", "Quarta", "Quinta", "Sexta", "Sábado", "Domingo"]
+            df_grouped = df_h_filtered.groupby("Dia_Semana").size().reset_index(name="Quantidade")
+            
+            # Ordena por dia da semana
+            df_grouped["Dia_Semana"] = pd.Categorical(df_grouped["Dia_Semana"], categories=day_order, ordered=True)
+            df_grouped = df_grouped.sort_values("Dia_Semana").dropna()
+
+            if not df_grouped.empty:
+                chart_ev = alt.Chart(df_grouped).mark_line(point=True, color=color_theme, strokeWidth=3).encode(
+                    x=alt.X('Dia_Semana:N', sort=day_order, title="Dia da Semana"),
+                    y=alt.Y('Quantidade:Q', title="Qtd. Chamados"),
+                    tooltip=['Dia_Semana', 'Quantidade']
+                ).properties(height=200)
+                st.altair_chart(chart_ev, use_container_width=True)
+            else:
+                st.caption("Sem dados suficientes para o gráfico de evolução semanal.")
+
+        def render_presentation_card(title, emoji, sub_df, color_theme, is_critical_type=False):
             with st.container(border=True):
                 st.markdown(f"<h3 style='color: {color_theme};'>{emoji} {title}</h3>", unsafe_allow_html=True)
                 stats = get_status_counts(sub_df, status_col="STATUS")
@@ -1487,44 +1532,66 @@ elif menu == "📺 Apresentação Executiva":
                     
                 st.write("---")
 
-                c_metrics, c_chart1, c_chart2 = st.columns([1.2, 1.5, 1.5])
-                
-                with c_metrics:
-                    st.markdown("**Status Resumido:**")
-                    st.markdown(f"🔴 **{stats['Acionado']}** Acionados")
-                    st.markdown(f"🟡 **{stats['Iniciado']}** Iniciados")
-                    st.markdown(f"🔵 **{stats['Tramitado']}** Tramitados")
-                    st.markdown(f"🟢 **{stats['Encerrado']}** Encerrados")
-
-                with c_chart1:
-                    st.markdown("**Distribuição Lateral:**")
-                    status_df = pd.DataFrame({
-                        "Status": ["Acionados", "Iniciados", "Tram.", "Encerr."],
-                        "Qtde": [stats["Acionado"], stats["Iniciado"], stats["Tramitado"], stats["Encerrado"]]
-                    })
-                    chart_st = alt.Chart(status_df).mark_bar(color=color_theme).encode(
-                        y=alt.Y('Status:N', sort=['Acionados', 'Iniciados', 'Tram.', 'Encerr.'], title=""),
-                        x=alt.X('Qtde:Q', title=""),
-                        tooltip=['Status', 'Qtde']
-                    ).properties(height=180)
-                    st.altair_chart(chart_st, use_container_width=True)
-                    
-                with c_chart2:
-                    st.markdown("**Top 5 Quadrantes:**")
-                    if "QUADRANTE" in sub_df.columns:
-                        quad_counts_card = sub_df[sub_df["QUADRANTE"] != "NÃO INFORMADO"]["QUADRANTE"].value_counts().head(5).reset_index()
-                        quad_counts_card.columns = ["Quadrante", "Qtde"]
-                        if not quad_counts_card.empty:
-                            chart_qd = alt.Chart(quad_counts_card).mark_bar(color="#F59E0B").encode(
-                                y=alt.Y('Quadrante:N', sort='-x', title=""),
-                                x=alt.X('Qtde:Q', title=""),
-                                tooltip=['Quadrante', 'Qtde']
-                            ).properties(height=180)
-                            st.altair_chart(chart_qd, use_container_width=True)
+                if is_critical_type:
+                    # Layout específico para Anéis Abertos e DWDM com a evolução Seg x Ter x Qua...
+                    c_chart_ev, c_chart2 = st.columns([1.8, 1.2])
+                    with c_chart_ev:
+                        render_evolution_chart_for_critical(sub_df, title, color_theme)
+                    with c_chart2:
+                        st.markdown("**Top Quadrantes:**")
+                        if "QUADRANTE" in sub_df.columns:
+                            quad_counts_card = sub_df[sub_df["QUADRANTE"] != "NÃO INFORMADO"]["QUADRANTE"].value_counts().head(4).reset_index()
+                            quad_counts_card.columns = ["Quadrante", "Qtde"]
+                            if not quad_counts_card.empty:
+                                chart_qd = alt.Chart(quad_counts_card).mark_bar(color=color_theme).encode(
+                                    y=alt.Y('Quadrante:N', sort='-x', title=""),
+                                    x=alt.X('Qtde:Q', title=""),
+                                    tooltip=['Quadrante', 'Qtde']
+                                ).properties(height=180)
+                                st.altair_chart(chart_qd, use_container_width=True)
+                            else:
+                                st.caption("Sem dados.")
                         else:
                             st.caption("Sem dados.")
-                    else:
-                        st.caption("Sem dados.")
+                else:
+                    # Layout padrão para os demais cards
+                    c_metrics, c_chart1, c_chart2 = st.columns([1.2, 1.5, 1.5])
+                    with c_metrics:
+                        st.markdown("**Status Resumido:**")
+                        st.markdown(f"🔴 **{stats['Acionado']}** Acionados")
+                        st.markdown(f"🟡 **{stats['Iniciado']}** Iniciados")
+                        st.markdown(f"🔵 **{stats['Tramitado']}** Tramitados")
+                        st.markdown(f"🟢 **{stats['Encerrado']}** Encerrados")
+
+                    with c_chart1:
+                        st.markdown("**Distribuição Lateral:**")
+                        status_df = pd.DataFrame({
+                            "Status": ["Acionados", "Iniciados", "Tram.", "Encerr."],
+                            "Qtde": [stats["Acionado"], stats["Iniciado"], stats["Tramitado"], stats["Encerrado"]]
+                        })
+                        chart_st = alt.Chart(status_df).mark_bar(color=color_theme).encode(
+                            y=alt.Y('Status:N', sort=['Acionados', 'Iniciados', 'Tram.', 'Encerr.'], title=""),
+                            x=alt.X('Qtde:Q', title=""),
+                            tooltip=['Status', 'Qtde']
+                        ).properties(height=180)
+                        st.altair_chart(chart_st, use_container_width=True)
+                        
+                    with c_chart2:
+                        st.markdown("**Top 5 Quadrantes:**")
+                        if "QUADRANTE" in sub_df.columns:
+                            quad_counts_card = sub_df[sub_df["QUADRANTE"] != "NÃO INFORMADO"]["QUADRANTE"].value_counts().head(5).reset_index()
+                            quad_counts_card.columns = ["Quadrante", "Qtde"]
+                            if not quad_counts_card.empty:
+                                chart_qd = alt.Chart(quad_counts_card).mark_bar(color="#F59E0B").encode(
+                                    y=alt.Y('Quadrante:N', sort='-x', title=""),
+                                    x=alt.X('Qtde:Q', title=""),
+                                    tooltip=['Quadrante', 'Qtde']
+                                ).properties(height=180)
+                                st.altair_chart(chart_qd, use_container_width=True)
+                            else:
+                                st.caption("Sem dados.")
+                        else:
+                            st.caption("Sem dados.")
 
                 st.write("---")
                 st.markdown(f"**🔍 Detalhamento (Selecione o Status para filtrar):**")
@@ -1544,10 +1611,10 @@ elif menu == "📺 Apresentação Executiva":
             st.write("")
 
         df_aneis = df[df["ANEL_ABERTO"] == "SIM"]
-        render_presentation_card("Anéis Abertos (Alto Impacto)", "🚨", df_aneis, "#DC2626")
+        render_presentation_card("Anéis Abertos (Alto Impacto)", "🚨", df_aneis, "#DC2626", is_critical_type=True)
 
         df_dwdm = df[df["DWDM"] == "SIM"]
-        render_presentation_card("Equipamentos DWDM (Alta Capacidade)", "🟣", df_dwdm, "#7C3AED")
+        render_presentation_card("Equipamentos DWDM (Alta Capacidade)", "🟣", df_dwdm, "#7C3AED", is_critical_type=True)
 
         df_b2b_view = df[df["IS_B2B_TSP"] == "SIM"]
         def is_fixa(val):
@@ -1569,10 +1636,92 @@ elif menu == "📺 Apresentação Executiva":
         render_presentation_card("Casos com Histórico CRC", "🟢", df_crc_view, "#16A34A")
 
 # ==========================================
-# ABA: MAPA IMPACTO (GEORREFERENCIADO)
+# ABA NOVA: CAUSA RAIZ POR IA (GEMINI API)
+# ==========================================
+elif menu == "🤖 Causa Raiz IA":
+    st.title("🤖 Tags Automáticas de Causa Raiz por IA (Gemini API)")
+    st.caption("Utilize Inteligência Artificial para analisar os alarmes, falhas e descrições dos chamados pendentes e gerar etiquetas automáticas de Causa Raiz e Recomendações de Ação.")
+
+    # Configuração da Chave da API do Gemini
+    gemini_key = os.environ.get("GEMINI_API_KEY")
+    if not gemini_key:
+        try:
+            gemini_key = st.secrets["gemini"]["api_key"]
+        except:
+            gemini_key = ""
+
+    api_key_input = st.text_input("🔑 Chave da API do Gemini (Google AI Studio):", value=gemini_key, type="password", placeholder="AIzaSy...")
+    
+    df_ai = load_table("backlog_fixa")
+    if df_ai.empty:
+        st.warning("Nenhuma base Fixa carregada na nuvem para análise.")
+    else:
+        # Filtra apenas os pendentes para otimizar
+        df_ai_pendentes = df_ai[~df_ai["STATUS"].isin(["Tramitado", "Encerrado"])].copy()
+        st.info(f"📊 Foram encontrados **{len(df_ai_pendentes)} chamados pendentes** aptos para análise automática de Causa Raiz.")
+
+        if st.button("🚀 Executar Análise Inteligente de Causa Raiz", type="primary"):
+            if not api_key_input:
+                st.error("⚠️ Por favor, insira uma Chave de API válida do Gemini.")
+            else:
+                with st.spinner("🤖 Analisando alarmes e gerando tags de causa raiz via Gemini..."):
+                    genai.configure(api_key=api_key_input)
+                    # Modelo otimizado para texto rápido
+                    model = genai.GenerativeModel('gemini-1.5-flash')
+                    
+                    resultados_ia = []
+                    # Analisa em lotes ou os primeiros 20 chamados pendentes para evitar timeout
+                    amostra = df_ai_pendentes.head(25)
+                    
+                    for _, row in amostra.iterrows():
+                        tsk = row.get("TSK", "")
+                        ne = row.get("NE_ID", "")
+                        falha = row.get("FALHA", "")
+                        obs = row.get("OBS", "")
+                        
+                        prompt = f"""
+                        Você é um Especialista Sênior em Operações de Telecomunicações e Redes Fixas / DWDM / GPON.
+                        Analise o seguinte chamado técnico e retorne EXATAMENTE duas informações curtas separadas por barra vertical (|):
+                        1. Tag Principal da Causa Raiz (Ex: Falha de Hardware, Cabo Rompido, Queda de Energia, Falha de Transmissão DWDM, Configuração de Roteamento, Estouro de Banda).
+                        2. Ação de Contorno Recomendada em até 8 palavras.
+
+                        Dados do Chamado:
+                        - TSK: {tsk}
+                        - Elemento (NE ID): {ne}
+                        - Alarme/Falha: {falha}
+                        - Observações: {obs}
+                        """
+                        try:
+                            response = model.generate_content(prompt)
+                            partes = response.text.strip().split("|")
+                            causa = partes[0].strip() if len(partes) > 0 else "Análise Indeterminada"
+                            acao = partes[1].strip() if len(partes) > 1 else "Verificar com equipe de campo"
+                        except Exception as e:
+                            causa = "Erro na API Gemini"
+                            acao = "Revisar manualmente"
+
+                        resultados_ia.append({
+                            "TSK": tsk,
+                            "NE_ID": ne,
+                            "FALHA": falha,
+                            "CAUSA_RAIZ_IA": causa,
+                            "ACAO_RECOMENDADA_IA": acao
+                        })
+                    
+                    df_resultado_ia = pd.DataFrame(resultados_ia)
+                    st.success("✅ Análise de Causa Raiz concluída com sucesso!")
+                    st.dataframe(df_resultado_ia, use_container_width=True, hide_index=True)
+                    
+                    output_ia = io.BytesIO()
+                    with pd.ExcelWriter(output_ia, engine="openpyxl") as writer:
+                        df_resultado_ia.to_excel(writer, index=False, sheet_name="Causa_Raiz_IA")
+                    st.download_button("📥 Baixar Relatório de Causa Raiz (Excel)", data=output_ia.getvalue(), file_name=f"Relatorio_Causa_Raiz_IA_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
+# ==========================================
+# ABA: MAPA IMPACTO (GEORREFERENCIADO - FIXA)
 # ==========================================
 elif menu == "🗺️ Mapa Impacto":
-    st.title("🗺️ Mapa de Impacto Georreferenciado")
+    st.title("🗺️ Mapa de Impacto (Rede Fixa)")
     st.caption("Visualização geoespacial dos chamados da rede fixa com base nas coordenadas de Latitude e Longitude.")
 
     df_map = load_table("backlog_fixa")
@@ -1587,28 +1736,27 @@ elif menu == "🗺️ Mapa Impacto":
         df_map["LATITUDE"] = pd.to_numeric(df_map["LATITUDE"], errors='coerce').fillna(0.0)
         df_map["LONGITUDE"] = pd.to_numeric(df_map["LONGITUDE"], errors='coerce').fillna(0.0)
 
-        # Filtra apenas registros com coordenadas válidas
         df_geo = df_map[(df_map["LATITUDE"] != 0.0) & (df_map["LONGITUDE"] != 0.0)].copy()
 
         mc1, mc2, mc3 = st.columns(3)
-        mc1.metric("Total de Chamados na Base", len(df_map))
+        mc1.metric("Total na Base Fixa", len(df_map))
         mc2.metric("Com Coordenadas Mapeadas", len(df_geo))
         mc3.metric("Sem Coordenadas Válidas", len(df_map) - len(df_geo))
 
         st.divider()
 
         if len(df_geo) == 0:
-            st.warning("⚠️ Nenhum registro possui coordenadas (Latitude/Longitude) válidas na planilha FMT atual.")
+            st.warning("⚠️ Nenhum registro possui coordenadas (Latitude/Longitude) válidas na planilha Fixa FMT.")
         else:
             col_f1, col_f2, col_f3 = st.columns(3)
             with col_f1:
                 st_map_opts = ["Todos"] + sorted(list(df_geo["STATUS"].dropna().unique()))
-                sel_st_map = st.selectbox("Filtrar por Status:", options=st_map_opts, key="map_st")
+                sel_st_map = st.selectbox("Filtrar por Status:", options=st_map_opts, key="map_st_fixa")
             with col_f2:
                 quad_map_opts = ["Todos"] + sorted(list(df_geo["QUADRANTE"].dropna().unique()))
-                sel_qd_map = st.selectbox("Filtrar por Quadrante (Q1/Q2/Q3/Q4):", options=quad_map_opts, key="map_qd")
+                sel_qd_map = st.selectbox("Filtrar por Quadrante:", options=quad_map_opts, key="map_qd_fixa")
             with col_f3:
-                sel_anel_map = st.selectbox("Filtrar por Anel Aberto:", options=["Todos", "SIM", "NÃO"], key="map_anel")
+                sel_anel_map = st.selectbox("Filtrar por Anel Aberto:", options=["Todos", "SIM", "NÃO"], key="map_anel_fixa")
 
             if sel_st_map != "Todos":
                 df_geo = df_geo[df_geo["STATUS"] == sel_st_map]
@@ -1619,13 +1767,13 @@ elif menu == "🗺️ Mapa Impacto":
 
             def get_color(row):
                 if str(row.get("ANEL_ABERTO")).upper() == "SIM":
-                    return [220, 38, 38, 200]  # Vermelho forte para Anel Aberto
+                    return [220, 38, 38, 200]
                 st_val = str(row.get("STATUS")).upper()
                 if "ENCERRADO" in st_val:
-                    return [22, 163, 74, 180]  # Verde
+                    return [22, 163, 74, 180]
                 elif "INICIADO" in st_val or "ACIONADO" in st_val:
-                    return [249, 115, 22, 200]  # Laranja
-                return [37, 99, 235, 200]      # Azul padrão
+                    return [249, 115, 22, 200]
+                return [37, 99, 235, 200]
 
             df_geo["color"] = df_geo.apply(get_color, axis=1)
 
@@ -1642,18 +1790,12 @@ elif menu == "🗺️ Mapa Impacto":
                 auto_highlight=True,
             )
 
-            view_state = pdk.ViewState(
-                latitude=lat_center,
-                longitude=lon_center,
-                zoom=10,
-                pitch=0,
-            )
-
+            view_state = pdk.ViewState(latitude=lat_center, longitude=lon_center, zoom=10, pitch=0)
             r = pdk.Deck(
                 layers=[layer],
                 initial_view_state=view_state,
                 tooltip={
-                    "html": "<b>TSK:</b> {TSK} <br/><b>NE ID:</b> {NE_ID} <br/><b>Quadrante:</b> {QUADRANTE} <br/><b>Status:</b> {STATUS} <br/><b>Anel Aberto:</b> {ANEL_ABERTO} <br/><b>Falha:</b> {FALHA}",
+                    "html": "<b>TSK:</b> {TSK} <br/><b>NE ID:</b> {NE_ID} <br/><b>Quadrante:</b> {QUADRANTE} <br/><b>Status:</b> {STATUS} <br/><b>Anel Aberto:</b> {ANEL_ABERTO}",
                     "style": {"backgroundColor": "steelblue", "color": "white"}
                 }
             )
@@ -1662,9 +1804,94 @@ elif menu == "🗺️ Mapa Impacto":
             st.caption("🔴 Vermelho: Anéis Abertos | 🟠 Laranja: Acionados/Iniciados | 🟢 Verde: Encerrados | 🔵 Azul: Demais")
 
             st.write("")
-            st.markdown("### 📋 Tabela Filtrada do Mapa")
-            cols_map_show = [c for c in ["TSK", "NE_ID", "QUADRANTE", "LATITUDE", "LONGITUDE", "STATUS", "ANEL_ABERTO", "FALHA"] if c in df_geo.columns]
+            st.markdown("### 📋 Tabela Filtrada do Mapa (Fixa)")
+            cols_map_show = [c for c in ["TSK", "NE_ID", "QUADRANTE", "LATITUDE", "LONGITUDE", "STATUS", "ANEL_ABERTO"] if c in df_geo.columns]
             st.dataframe(df_geo[cols_map_show], use_container_width=True, hide_index=True)
+
+# ==========================================
+# ABA: MAPA GERAL (GEORREFERENCIADO - FMMT)
+# ==========================================
+elif menu == "🗺️ Mapa Geral":
+    st.title("🗺️ Mapa Geral de Chamados (Rede Móvel / FMMT)")
+    st.caption("Visualização geoespacial completa de todos os chamados da base FMMT georreferenciados.")
+
+    df_map_fmmt = load_table("backlog_fmmt")
+
+    if df_map_fmmt.empty:
+        st.warning("Nenhuma base FMMT carregada na nuvem. Faça o upload do arquivo FMMT na aba 'Upload & Processamento'.")
+    else:
+        for c in ["LATITUDE", "LONGITUDE", "QUADRANTE", "STATUS", "TSK", "NE_ID", "FALHA"]:
+            if c not in df_map_fmmt.columns:
+                df_map_fmmt[c] = 0.0 if c in ["LATITUDE", "LONGITUDE"] else "NÃO INFORMADO"
+
+        df_map_fmmt["LATITUDE"] = pd.to_numeric(df_map_fmmt["LATITUDE"], errors='coerce').fillna(0.0)
+        df_map_fmmt["LONGITUDE"] = pd.to_numeric(df_map_fmmt["LONGITUDE"], errors='coerce').fillna(0.0)
+
+        df_geo_fmmt = df_map_fmmt[(df_map_fmmt["LATITUDE"] != 0.0) & (df_map_fmmt["LONGITUDE"] != 0.0)].copy()
+
+        mc1, mc2, mc3 = st.columns(3)
+        mc1.metric("Total na Base FMMT", len(df_map_fmmt))
+        mc2.metric("Com Coordenadas Mapeadas", len(df_geo_fmmt))
+        mc3.metric("Sem Coordenadas Válidas", len(df_map_fmmt) - len(df_geo_fmmt))
+
+        st.divider()
+
+        if len(df_geo_fmmt) == 0:
+            st.warning("⚠️ Nenhum registro possui coordenadas (Latitude/Longitude) válidas na base FMMT.")
+        else:
+            col_f1, col_f2 = st.columns(2)
+            with col_f1:
+                st_map_opts_f = ["Todos"] + sorted(list(df_geo_fmmt["STATUS"].dropna().unique()))
+                sel_st_map_f = st.selectbox("Filtrar por Status:", options=st_map_opts_f, key="map_st_fmmt")
+            with col_f2:
+                quad_map_opts_f = ["Todos"] + sorted(list(df_geo_fmmt["QUADRANTE"].dropna().unique()))
+                sel_qd_map_f = st.selectbox("Filtrar por Quadrante:", options=quad_map_opts_f, key="map_qd_fmmt")
+
+            if sel_st_map_f != "Todos":
+                df_geo_fmmt = df_geo_fmmt[df_geo_fmmt["STATUS"] == sel_st_map_f]
+            if sel_qd_map_f != "Todos":
+                df_geo_fmmt = df_geo_fmmt[df_geo_fmmt["QUADRANTE"] == sel_qd_map_f]
+
+            def get_color_fmmt(row):
+                st_val = str(row.get("STATUS")).upper()
+                if "ENCERRADO" in st_val:
+                    return [22, 163, 74, 180]  # Verde
+                elif "INICIADO" in st_val or "ACIONADO" in st_val:
+                    return [249, 115, 22, 200]  # Laranja
+                return [37, 99, 235, 200]      # Azul padrão
+
+            df_geo_fmmt["color"] = df_geo_fmmt.apply(get_color_fmmt, axis=1)
+
+            lat_center = df_geo_fmmt["LATITUDE"].mean() if not df_geo_fmmt.empty else -23.5505
+            lon_center = df_geo_fmmt["LONGITUDE"].mean() if not df_geo_fmmt.empty else -46.6333
+
+            layer_f = pdk.Layer(
+                "ScatterplotLayer",
+                data=df_geo_fmmt,
+                get_position='[LONGITUDE, LATITUDE]',
+                get_color='color',
+                get_radius=350,
+                pickable=True,
+                auto_highlight=True,
+            )
+
+            view_state_f = pdk.ViewState(latitude=lat_center, longitude=lon_center, zoom=10, pitch=0)
+            r_f = pdk.Deck(
+                layers=[layer_f],
+                initial_view_state=view_state_f,
+                tooltip={
+                    "html": "<b>TSK:</b> {TSK} <br/><b>NE ID:</b> {NE_ID} <br/><b>Quadrante:</b> {QUADRANTE} <br/><b>Status:</b> {STATUS} <br/><b>Falha:</b> {FALHA}",
+                    "style": {"backgroundColor": "darkslateblue", "color": "white"}
+                }
+            )
+
+            st.pydeck_chart(r_f)
+            st.caption("🟠 Laranja: Acionados/Iniciados | 🟢 Verde: Encerrados | 🔵 Azul: Demais")
+
+            st.write("")
+            st.markdown("### 📋 Tabela Filtrada do Mapa Geral (FMMT)")
+            cols_map_show_f = [c for c in ["TSK", "NE_ID", "QUADRANTE", "LATITUDE", "LONGITUDE", "STATUS", "FALHA"] if c in df_geo_fmmt.columns]
+            st.dataframe(df_geo_fmmt[cols_map_show_f], use_container_width=True, hide_index=True)
 
 # ==========================================
 # ABA NOVO: CASOS CRÍTICOS (MANUAL)
