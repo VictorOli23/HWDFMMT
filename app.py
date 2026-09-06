@@ -282,7 +282,7 @@ if not st.session_state['logged_in']:
             st.markdown("""
             **Atualizações Recentes:**
             * 📈 **Evolução por Dia da Semana (Seg x Ter x Qua)** nos cards de Anéis e DWDM.
-            * 🗺️ Mapas Interativos de Impacto e Geral ativos com divisões de Quadrantes (Q1 a Q4).
+            * 🗺️ Mapas Interativos com Regiões Coloridas por Quadrantes (Q1 a Q4).
             """)
 
     with col_login:
@@ -1630,7 +1630,7 @@ elif menu == "📺 Apresentação Executiva":
 # ==========================================
 elif menu == "🗺️ Mapa Impacto":
     st.title("🗺️ Mapa de Impacto (Rede Fixa)")
-    st.caption("Visualização geoespacial dos chamados da rede fixa dividida nos 4 quadrantes (Q1 a Q4) exatamente conforme o padrão de atendimento setorial.")
+    st.caption("Regiões metropolitanas e capital pintadas por quadrantes: Q1 (Vermelho - Leste/Nordeste), Q2 (Roxo - Norte/Oeste), Q3 (Amarelo - Sudoeste) e Q4 (Azul - Sudeste/ABC).")
 
     df_map = load_table("backlog_fixa")
 
@@ -1675,24 +1675,52 @@ elif menu == "🗺️ Mapa Impacto":
 
             def get_color(row):
                 if str(row.get("ANEL_ABERTO")).upper() == "SIM":
-                    return [220, 38, 38, 200]
+                    return [220, 38, 38, 220]
                 st_val = str(row.get("STATUS")).upper()
                 if "ENCERRADO" in st_val:
-                    return [22, 163, 74, 180]
+                    return [22, 163, 74, 200]
                 elif "INICIADO" in st_val or "ACIONADO" in st_val:
-                    return [249, 115, 22, 200]
+                    return [249, 115, 22, 220]
                 return [37, 99, 235, 200]
 
             df_geo["color"] = df_geo.apply(get_color, axis=1)
 
-            lat_center = -23.5505
-            lon_center = -46.6333
+            lat_c, lon_c = -23.5505, -46.6333
 
-            # Linhas divisorias em formato de 'X' (Setores Q1, Q2, Q3, Q4) passando pelo centro da capital
-            lines_data = [
-                {"path": [[-48.0, lat_center - 0.7], [-45.2, lat_center + 0.7]], "name": "Divisor Noroeste-Sudeste"},
-                {"path": [[-48.0, lat_center + 0.7], [-45.2, lat_center - 0.7]], "name": "Divisor Sudoeste-Nordeste"}
+            # Definição dos Polígonos Preenchidos para Q1, Q2, Q3 e Q4 cobrindo a região metropolitana de SP
+            polygons_data = [
+                {
+                    "name": "Q1 (Leste / Nordeste - Guarulhos, Mogi, ZL)",
+                    "polygon": [[lon_c, lat_c], [-44.5, lat_c + 1.2], [-44.5, lat_c - 0.5], [lon_c, lat_c - 0.2]],
+                    "color": [239, 68, 68, 45] # Vermelho translúcido
+                },
+                {
+                    "name": "Q2 (Norte / Noroeste / Oeste - Osasco, Barueri, Santana, Lapa)",
+                    "polygon": [[lon_c, lat_c], [-48.2, lat_c + 1.2], [-48.2, lat_c], [lon_c, lat_c]],
+                    "color": [147, 51, 234, 45] # Roxo translúcido
+                },
+                {
+                    "name": "Q3 (Sudoeste / Sul-Oeste - Cotia, Taboão, Sto Amaro)",
+                    "polygon": [[lon_c, lat_c], [-48.2, lat_c], [-48.2, lat_c - 1.5], [lon_c, lat_c - 0.5]],
+                    "color": [234, 179, 8, 45] # Amarelo translúcido
+                },
+                {
+                    "name": "Q4 (Sudeste / ABC Paulista - Sbc, Santo André, Mauá, V. Mariana)",
+                    "polygon": [[lon_c, lat_c], [lon_c, lat_c - 0.2], [-45.5, lat_c - 1.5], [-45.5, lat_c]],
+                    "color": [59, 130, 246, 45] # Azul translúcido
+                }
             ]
+
+            polygon_layer = pdk.Layer(
+                "PolygonLayer",
+                data=polygons_data,
+                get_polygon="polygon",
+                get_fill_color="color",
+                pickable=False,
+                stroked=True,
+                get_line_color=[255, 255, 255, 100],
+                get_line_width=2
+            )
 
             scatter_layer = pdk.Layer(
                 "ScatterplotLayer",
@@ -1704,19 +1732,9 @@ elif menu == "🗺️ Mapa Impacto":
                 auto_highlight=True,
             )
 
-            line_layer = pdk.Layer(
-                "PathLayer",
-                data=lines_data,
-                get_path="path",
-                get_color=[255, 255, 0, 230], # Amarelo destacado igual ao modelo corporativo
-                width_scale=25,
-                width_min_pixels=4,
-                pickable=False
-            )
-
-            view_state = pdk.ViewState(latitude=lat_center, longitude=lon_center, zoom=10, pitch=0)
+            view_state = pdk.ViewState(latitude=lat_c, longitude=lon_c, zoom=10, pitch=0)
             r = pdk.Deck(
-                layers=[line_layer, scatter_layer],
+                layers=[polygon_layer, scatter_layer],
                 initial_view_state=view_state,
                 tooltip={
                     "html": "<b>TSK:</b> {TSK} <br/><b>NE ID:</b> {NE_ID} <br/><b>Quadrante:</b> {QUADRANTE} <br/><b>Status:</b> {STATUS} <br/><b>Anel Aberto:</b> {ANEL_ABERTO}",
@@ -1725,7 +1743,7 @@ elif menu == "🗺️ Mapa Impacto":
             )
 
             st.pydeck_chart(r)
-            st.caption("🟡 Linhas Amarelas: Divisórias Setoriais de Quadrantes (Q1 a Q4) | 🔴 Vermelho: Anéis Abertos | 🟠 Laranja: Acionados/Iniciados | 🟢 Verde: Encerrados")
+            st.caption("🔴 Q1: Vermelho (Leste/Guarulhos) | 🟣 Q2: Roxo (Oeste/Osasco/Barueri) | 🟡 Q3: Amarelo (Sudoeste/Cotia/Sto Amaro) | 🔵 Q4: Azul (ABC/Sudeste)")
 
             st.write("")
             st.markdown("### 📋 Tabela Filtrada do Mapa (Fixa)")
@@ -1737,7 +1755,7 @@ elif menu == "🗺️ Mapa Impacto":
 # ==========================================
 elif menu == "🗺️ Mapa Geral":
     st.title("🗺️ Mapa Geral de Chamados (Rede Móvel / FMMT)")
-    st.caption("Visualização geoespacial completa com as divisões setoriais dos quadrantes (Q1 a Q4) para a região metropolitana e capital.")
+    st.caption("Visualização geoespacial completa com as regiões metropolitanas pintadas e preenchidas para Q1, Q2, Q3 e Q4.")
 
     df_map_fmmt = load_table("backlog_fmmt")
 
@@ -1786,13 +1804,25 @@ elif menu == "🗺️ Mapa Geral":
 
             df_geo_fmmt["color"] = df_geo_fmmt.apply(get_color_fmmt, axis=1)
 
-            lat_center = -23.5505
-            lon_center = -46.6333
+            lat_c, lon_c = -23.5505, -46.6333
 
-            lines_data_f = [
-                {"path": [[-48.0, lat_center - 0.7], [-45.2, lat_center + 0.7]], "name": "Divisor Noroeste-Sudeste"},
-                {"path": [[-48.0, lat_center + 0.7], [-45.2, lat_center - 0.7]], "name": "Divisor Sudoeste-Nordeste"}
+            polygons_data_f = [
+                {"name": "Q1", "polygon": [[lon_c, lat_c], [-44.5, lat_c + 1.2], [-44.5, lat_c - 0.5], [lon_c, lat_c - 0.2]], "color": [239, 68, 68, 45]},
+                {"name": "Q2", "polygon": [[lon_c, lat_c], [-48.2, lat_c + 1.2], [-48.2, lat_c], [lon_c, lat_c]], "color": [147, 51, 234, 45]},
+                {"name": "Q3", "polygon": [[lon_c, lat_c], [-48.2, lat_c], [-48.2, lat_c - 1.5], [lon_c, lat_c - 0.5]], "color": [234, 179, 8, 45]},
+                {"name": "Q4", "polygon": [[lon_c, lat_c], [lon_c, lat_c - 0.2], [-45.5, lat_c - 1.5], [-45.5, lat_c]], "color": [59, 130, 246, 45]}
             ]
+
+            polygon_layer_f = pdk.Layer(
+                "PolygonLayer",
+                data=polygons_data_f,
+                get_polygon="polygon",
+                get_fill_color="color",
+                pickable=False,
+                stroked=True,
+                get_line_color=[255, 255, 255, 100],
+                get_line_width=2
+            )
 
             scatter_layer_f = pdk.Layer(
                 "ScatterplotLayer",
@@ -1804,19 +1834,9 @@ elif menu == "🗺️ Mapa Geral":
                 auto_highlight=True,
             )
 
-            line_layer_f = pdk.Layer(
-                "PathLayer",
-                data=lines_data_f,
-                get_path="path",
-                get_color=[255, 255, 0, 230],
-                width_scale=25,
-                width_min_pixels=4,
-                pickable=False
-            )
-
-            view_state_f = pdk.ViewState(latitude=lat_center, longitude=lon_center, zoom=10, pitch=0)
+            view_state_f = pdk.ViewState(latitude=lat_c, longitude=lon_c, zoom=10, pitch=0)
             r_f = pdk.Deck(
-                layers=[line_layer_f, scatter_layer_f],
+                layers=[polygon_layer_f, scatter_layer_f],
                 initial_view_state=view_state_f,
                 tooltip={
                     "html": "<b>TSK:</b> {TSK} <br/><b>NE ID:</b> {NE_ID} <br/><b>Quadrante:</b> {QUADRANTE} <br/><b>Status:</b> {STATUS} <br/><b>Falha:</b> {FALHA}",
@@ -1825,7 +1845,7 @@ elif menu == "🗺️ Mapa Geral":
             )
 
             st.pydeck_chart(r_f)
-            st.caption("🟡 Linhas Amarelas: Divisórias Setoriais de Quadrantes (Q1 a Q4) | 🟠 Laranja: Acionados/Iniciados | 🟢 Verde: Encerrados | 🔵 Azul: Demais")
+            st.caption("🔴 Q1: Vermelho | 🟣 Q2: Roxo | 🟡 Q3: Amarelo | 🔵 Q4: Azul (Regiões preenchidas)")
 
             st.write("")
             st.markdown("### 📋 Tabela Filtrada do Mapa Geral (FMMT)")
