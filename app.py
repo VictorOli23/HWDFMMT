@@ -250,7 +250,6 @@ if not st.session_state['logged_in']:
                 df_b2b_t = pd.read_sql_table('backlog_b2b', conn)
                 if not df_b2b_t.empty:
                     df_b2b_t.columns = [str(c).upper() for c in df_b2b_t.columns]
-                    # Filtra estritamente por GRUPO_ACIONADO contendo "CAMPO FMMT TSP" e pendentes
                     if "GRUPO_ACIONADO" in df_b2b_t.columns and "STATUS" in df_b2b_t.columns:
                         mask_tsp = df_b2b_t["GRUPO_ACIONADO"].astype(str).str.upper().str.contains("CAMPO FMMT TSP", na=False)
                         mask_pendente = ~df_b2b_t["STATUS"].isin(["TRAMITADO", "ENCERRADO"])
@@ -280,9 +279,10 @@ if not st.session_state['logged_in']:
             st.markdown("---")
             st.markdown("""
             **Atualizações Recentes:**
+            * 🟢 Novo Export Consolidado Global (Com todas as Dinâmicas) na aba Apresentação Executiva.
+            * 🟢 Geração Automática de Tabelas Dinâmicas no Export Excel.
             * 🟢 Filtro isolado para Agregadores (RMAG/RNAG) ativo.
             * 🔄 Handover Automático operando com sucesso.
-            * 🎨 Nova interface corporativa com tema imersivo.
             """)
 
     with col_login:
@@ -973,7 +973,26 @@ elif menu == "📂 Backlog Operacional (Fixa)":
         with col_b2:
             output = io.BytesIO()
             with pd.ExcelWriter(output, engine="openpyxl") as writer:
+                # Aba de Base Bruta
                 df_bk_view[cols_backlog].to_excel(writer, index=False, sheet_name="Backlog_Fixa_FMMT")
+                
+                # Dinâmica: Resumo por Status
+                if not df_bk_view.empty:
+                    df_st = df_bk_view.groupby("STATUS").size().reset_index(name="Quantidade")
+                    df_st.to_excel(writer, index=False, sheet_name="Dinâmica_Status")
+                    
+                    # Dinâmica: Resumo Quadrante x Status
+                    if "QUADRANTE" in df_bk_view.columns:
+                        df_qd = pd.crosstab(df_bk_view["QUADRANTE"].fillna("NÃO INFORMADO"), df_bk_view["STATUS"].fillna("NÃO INFORMADO"), margins=True, margins_name="Total Geral")
+                        df_qd.to_excel(writer, sheet_name="Dinâmica_Quadrante")
+                        
+                    # Dinâmica: Resumo por Técnico
+                    if "TECNICO" in df_bk_view.columns:
+                        tec_view = df_bk_view[df_bk_view["TECNICO"].astype(str).str.strip() != ""]
+                        if not tec_view.empty:
+                            df_tec = tec_view.groupby("TECNICO").size().reset_index(name="Quantidade").sort_values("Quantidade", ascending=False)
+                            df_tec.to_excel(writer, index=False, sheet_name="Dinâmica_Técnicos")
+
             st.download_button("📥 Baixar Backlog Unificado em Excel (.xlsx)", data=output.getvalue(), file_name=f"Backlog_Unificado_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
 # ==========================================
@@ -1078,7 +1097,24 @@ elif menu == "📱 Backlog Móvel":
         with col_save_m2:
             output_movel = io.BytesIO()
             with pd.ExcelWriter(output_movel, engine="openpyxl") as writer:
+                # Aba de Base Bruta
                 df_movel_view[cols_movel].to_excel(writer, index=False, sheet_name="Backlog_Movel")
+                
+                # Dinâmicas
+                if not df_movel_view.empty:
+                    df_st_m = df_movel_view.groupby("STATUS").size().reset_index(name="Quantidade")
+                    df_st_m.to_excel(writer, index=False, sheet_name="Dinâmica_Status")
+                    
+                    if "QUADRANTE" in df_movel_view.columns:
+                        df_qd_m = pd.crosstab(df_movel_view["QUADRANTE"].fillna("NÃO INFORMADO"), df_movel_view["STATUS"].fillna("NÃO INFORMADO"), margins=True, margins_name="Total Geral")
+                        df_qd_m.to_excel(writer, sheet_name="Dinâmica_Quadrante")
+                        
+                    if "TECNICO" in df_movel_view.columns:
+                        tec_view_m = df_movel_view[df_movel_view["TECNICO"].astype(str).str.strip() != ""]
+                        if not tec_view_m.empty:
+                            df_tec_m = tec_view_m.groupby("TECNICO").size().reset_index(name="Quantidade").sort_values("Quantidade", ascending=False)
+                            df_tec_m.to_excel(writer, index=False, sheet_name="Dinâmica_Técnicos")
+
             st.download_button("📥 Baixar Backlog Móvel em Excel (.xlsx)", data=output_movel.getvalue(), file_name=f"Backlog_Movel_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
 # ==========================================
@@ -1276,23 +1312,119 @@ elif menu == "💼 Gestão B2B":
         with col_save_b2:
             output_b2b = io.BytesIO()
             with pd.ExcelWriter(output_b2b, engine="openpyxl") as writer:
+                # Aba de Base Bruta
                 df_b2b_view[cols_b2b].to_excel(writer, index=False, sheet_name="B2B_Operacao")
+                
+                # Dinâmicas
+                if not df_b2b_view.empty:
+                    df_st_b2b = df_b2b_view.groupby("STATUS").size().reset_index(name="Quantidade")
+                    df_st_b2b.to_excel(writer, index=False, sheet_name="Dinâmica_Status")
+                    
+                    if "GRUPO_ACIONADO" in df_b2b_view.columns:
+                        df_grp_b2b = pd.crosstab(df_b2b_view["GRUPO_ACIONADO"].fillna("NÃO INFORMADO"), df_b2b_view["STATUS"].fillna("NÃO INFORMADO"), margins=True, margins_name="Total Geral")
+                        df_grp_b2b.to_excel(writer, sheet_name="Dinâmica_Grupos")
+                        
+                    if "QUADRANTE" in df_b2b_view.columns:
+                        df_qd_b2b = pd.crosstab(df_b2b_view["QUADRANTE"].fillna("NÃO INFORMADO"), df_b2b_view["STATUS"].fillna("NÃO INFORMADO"), margins=True, margins_name="Total Geral")
+                        df_qd_b2b.to_excel(writer, sheet_name="Dinâmica_Quadrante")
+                        
+                    if "TECNICO" in df_b2b_view.columns:
+                        tec_view_b2b = df_b2b_view[df_b2b_view["TECNICO"].astype(str).str.strip() != ""]
+                        if not tec_view_b2b.empty:
+                            df_tec_b2b = tec_view_b2b.groupby("TECNICO").size().reset_index(name="Quantidade").sort_values("Quantidade", ascending=False)
+                            df_tec_b2b.to_excel(writer, index=False, sheet_name="Dinâmica_Técnicos")
+
             st.download_button("📥 Baixar Base B2B em Excel (.xlsx)", data=output_b2b.getvalue(), file_name=f"B2B_Operacao_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
 # ==========================================
-# ABA 8: APRESENTAÇÃO EXECUTIVA
+# ABA 8: APRESENTAÇÃO EXECUTIVA E EXPORT CLIENTE
 # ==========================================
 elif menu == "📺 Apresentação Executiva":
     st.title("📺 Apresentação Executiva - Painel NOC FMT")
-    st.markdown("Visão consolidada do Backbone para report gerencial e tomada de decisão rápida.")
     
+    # ----------------------------------------------------
+    # BLOCO: EXPORTAÇÃO GLOBAL CONSOLIDADA PARA O CLIENTE
+    # ----------------------------------------------------
+    st.markdown("### 📥 Relatório Consolidado Completo (Visão Cliente)")
+    st.caption("Baixe TODAS as bases atualizadas (Anéis, B2B, CRC, DWDM e Críticos) com suas tabelas dinâmicas prontas em um único arquivo Excel.")
+    
+    def safe_crosstab(df, col1, col2, writer, sheet_name):
+        c1 = df[col1] if col1 in df.columns else pd.Series(["NÃO INFORMADO"] * len(df), name=col1)
+        c2 = df[col2] if col2 in df.columns else pd.Series(["NÃO INFORMADO"] * len(df), name=col2)
+        pd.crosstab(c1.fillna("NÃO INFORMADO"), c2.fillna("NÃO INFORMADO"), margins=True, margins_name="Total Geral").to_excel(writer, sheet_name=sheet_name)
+    
+    output_geral = io.BytesIO()
+    with pd.ExcelWriter(output_geral, engine="openpyxl") as writer:
+        df_f_exp = load_table("backlog_fixa")
+        df_b_exp = load_table("backlog_b2b")
+        df_c_exp = get_crc_data()
+        df_cr_exp = load_table("casos_criticos")
+        
+        has_data = False
+        
+        # 1. Anéis Abertos
+        if not df_f_exp.empty and "ANEL_ABERTO" in df_f_exp.columns:
+            df_aneis_exp = df_f_exp[df_f_exp["ANEL_ABERTO"] == "SIM"]
+            if not df_aneis_exp.empty:
+                has_data = True
+                df_aneis_exp.to_excel(writer, index=False, sheet_name="Dados_Aneis")
+                if "QUADRANTE" in df_aneis_exp.columns and "STATUS" in df_aneis_exp.columns:
+                    safe_crosstab(df_aneis_exp, "QUADRANTE", "STATUS", writer, "Resumo_Aneis")
+                    
+        # 2. DWDM
+        if not df_f_exp.empty and "DWDM" in df_f_exp.columns:
+            df_dwdm_exp = df_f_exp[df_f_exp["DWDM"] == "SIM"]
+            if not df_dwdm_exp.empty:
+                has_data = True
+                df_dwdm_exp.to_excel(writer, index=False, sheet_name="Dados_DWDM")
+                if "QUADRANTE" in df_dwdm_exp.columns and "STATUS" in df_dwdm_exp.columns:
+                    safe_crosstab(df_dwdm_exp, "QUADRANTE", "STATUS", writer, "Resumo_DWDM")
+                    
+        # 3. B2B (Focado em TSP ou Geral)
+        if not df_b_exp.empty:
+            has_data = True
+            df_b_exp.to_excel(writer, index=False, sheet_name="Dados_B2B")
+            if "GRUPO_ACIONADO" in df_b_exp.columns and "STATUS" in df_b_exp.columns:
+                safe_crosstab(df_b_exp, "GRUPO_ACIONADO", "STATUS", writer, "Resumo_B2B")
+                
+        # 4. CRC
+        if not df_c_exp.empty:
+            has_data = True
+            df_c_exp.to_excel(writer, index=False, sheet_name="Dados_CRC")
+            if "end_id" in df_c_exp.columns and "status" in df_c_exp.columns:
+                safe_crosstab(df_c_exp, "end_id", "status", writer, "Resumo_CRC")
+                
+        # 5. Casos Críticos
+        if not df_cr_exp.empty:
+            has_data = True
+            df_cr_exp.to_excel(writer, index=False, sheet_name="Casos_Criticos")
+            if "TIPO" in df_cr_exp.columns:
+                df_cr_exp.groupby("TIPO").size().reset_index(name="Quantidade").to_excel(writer, index=False, sheet_name="Resumo_Criticos")
+                
+        # Garantia de export vazio para evitar crash
+        if not has_data:
+            pd.DataFrame({"Mensagem": ["Nenhum dado encontrado no banco."]}).to_excel(writer, index=False, sheet_name="Sem_Dados")
+            
+    st.download_button(
+        label="📥 Gerar e Baixar Relatório Consolidado (Tudo em 1)", 
+        data=output_geral.getvalue(), 
+        file_name=f"Relatorio_Geral_Cliente_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx", 
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        type="primary",
+        use_container_width=True
+    )
+    st.divider()
+
+    # ----------------------------------------------------
+    # PAINEL EXECUTIVO EM TELA
+    # ----------------------------------------------------
     df = load_table("backlog_fixa")
     df_old = load_table("backlog_fixa_previous")
     df_b2b_exec = load_table("backlog_b2b")
     df_hist = load_table("historico_diario")
 
     if df.empty:
-        st.warning("Nenhuma base carregada na nuvem.")
+        st.warning("Nenhuma base Fixa carregada na nuvem para a visualização gráfica.")
     else:
         for c in ["DWDM", "ANEL_ABERTO", "IS_B2B", "IS_CRC", "QUADRANTE"]:
             if c not in df.columns: df[c] = "NÃO"
@@ -1403,6 +1535,9 @@ elif menu == "📺 Apresentação Executiva":
                     st.caption(f"Nenhum chamado '{sel_tab}' encontrado.")
 
             st.write("")
+
+        def b2b_tsp_tokens(r, tokens): # auxiliar inline
+            return tokens
 
         # 1. Anéis Abertos
         df_aneis = df[df["ANEL_ABERTO"] == "SIM"]
