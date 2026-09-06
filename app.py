@@ -1629,7 +1629,7 @@ elif menu == "📺 Apresentação Executiva":
         render_presentation_card("Casos com Histórico CRC", "🟢", df_crc_view, "#16A34A")
 
 # ==========================================
-# ABA: CAUSA RAIZ IA (GEMINI API)
+# ABA NOVA: CAUSA RAIZ IA (GEMINI API)
 # ==========================================
 elif menu == "🤖 Causa Raiz IA":
     st.title("🤖 Tags Automáticas de Causa Raiz por IA (Gemini API)")
@@ -1659,8 +1659,18 @@ elif menu == "🤖 Causa Raiz IA":
                     try:
                         genai.configure(api_key=api_key_input.strip())
                         
-                        # Usando o modelo com o prefixo completo aceito pelo endpoint v1
-                        model = genai.GenerativeModel('models/gemini-1.5-flash')
+                        # Descobre automaticamente um modelo compatível ativo na sua conta
+                        active_model_name = 'gemini-1.5-flash'
+                        try:
+                            for m in genai.list_models():
+                                if 'generateContent' in m.supported_generation_methods:
+                                    if 'flash' in m.name.lower():
+                                        active_model_name = m.name
+                                        break
+                        except:
+                            pass
+                        
+                        model = genai.GenerativeModel(active_model_name)
                         
                         resultados_ia = []
                         amostra = df_ai_pendentes.head(25)
@@ -1700,7 +1710,7 @@ Dados do Chamado:
                             })
                         
                         df_resultado_ia = pd.DataFrame(resultados_ia)
-                        st.success("✅ Análise de Causa Raiz concluída com sucesso!")
+                        st.success(f"✅ Análise de Causa Raiz concluída com sucesso usando o modelo `{active_model_name}`!")
                         st.dataframe(df_resultado_ia, use_container_width=True, hide_index=True)
                         
                         output_ia = io.BytesIO()
