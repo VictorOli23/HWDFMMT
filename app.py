@@ -9,6 +9,7 @@ import altair as alt
 from datetime import datetime
 import base64
 import time
+import pydeck as pdk
 from openpyxl.worksheet.table import Table, TableStyleInfo
 
 # ==========================================
@@ -280,9 +281,8 @@ if not st.session_state['logged_in']:
             st.markdown("---")
             st.markdown("""
             **Atualizações Recentes:**
+            * 🗺️ Nova aba de **Mapa de Impacto (Georreferenciado)** ativa.
             * 🟢 Tabelas Nativas Formatadas do Excel ativas no Relatório Consolidado.
-            * 🟢 Geração Automática de Tabelas Dinâmicas no Export Excel.
-            * 🟢 Filtro isolado para Agregadores (RMAG/RNAG) ativo.
             * 🔄 Handover Automático operando com sucesso.
             """)
 
@@ -421,13 +421,18 @@ def get_single_series(df, col_name_hints, fallback_val=""):
         res = res.iloc[:, 0]
     return res.fillna("").astype(str)
 
+def get_single_series_numeric(df, col_name_hints, fallback_val=0.0):
+    s = get_single_series(df, col_name_hints, str(fallback_val))
+    return pd.to_numeric(s.str.replace(',', '.'), errors='coerce').fillna(fallback_val)
+
 def extrair_colunas(df):
     if df.empty:
         return {
             "TSK": pd.Series(dtype=str), "EVENTO": pd.Series(dtype=str), "END_ID": pd.Series(dtype=str), 
             "NE_ID": pd.Series(dtype=str), "TIPO_EQUIPAMENTO": pd.Series(dtype=str), "STATUS": pd.Series(dtype=str), 
             "FALHA": pd.Series(dtype=str), "DATA_CRIACAO": pd.Series(dtype=str), 
-            "TECNICO": pd.Series(dtype=str), "RESUMO": pd.Series(dtype=str), "OBS": pd.Series(dtype=str)
+            "TECNICO": pd.Series(dtype=str), "RESUMO": pd.Series(dtype=str), "OBS": pd.Series(dtype=str),
+            "LATITUDE": pd.Series(dtype=float), "LONGITUDE": pd.Series(dtype=float)
         }
     
     tsk_s = get_single_series(df, ["NÚMERO", "NUMERO", "TSK", "CHAMADO", "ORDEM", "TICKET", "ID", "PROTOCOLO", "REQ"], "")
@@ -445,7 +450,9 @@ def extrair_colunas(df):
         "DATA_CRIACAO": get_single_series(df, ["DATA DE CRIAÇÃO", "DATA_CRIACAO", "CRIA", "ABERTURA"], ""),
         "TECNICO": get_single_series(df, ["NOME DO TÉCNICO", "NOME TÉCNICO CAMPO", "TÉCNICO", "TECNICO", "RESPONSÁVEL"], ""),
         "RESUMO": get_single_series(df, ["RESUMO", "OBSERVAÇÕES"], ""),
-        "OBS": get_single_series(df, ["OBS", "NOTAS", "HISTORICO"], "")
+        "OBS": get_single_series(df, ["OBS", "NOTAS", "HISTORICO"], ""),
+        "LATITUDE": get_single_series_numeric(df, ["LATITUDE DO ENDEREÇO", "LATITUDE", "LAT"], 0.0),
+        "LONGITUDE": get_single_series_numeric(df, ["LONGITUDE DO ENDEREÇO", "LONGITUDE", "LONG", "LON"], 0.0)
     }
 
 def categorize_status(st_str):
@@ -519,6 +526,7 @@ abas_disponiveis = [
     "🔄 Handover (Entrantes/Saintes)",
     "💼 Gestão B2B",
     "📺 Apresentação Executiva",
+    "🗺️ Mapa Impacto",
     "🚨 Casos Críticos",
     "📋 Base Geral FMT",
     "🗄️ Histórico CRC",
@@ -592,7 +600,7 @@ if menu == "👤 Gestão de Usuários (Admin)":
 # ==========================================
 elif menu == "📥 Upload & Processamento":
     st.title("📥 Ingestão, Fusão e Cruzamento (FMT + FMMT)")
-    st.caption("FUSÃO E CRUZAMENTO ATIVO: Relacionando Anéis, Grafana e Bases Fixa/Móvel com segurança.")
+    st.caption("FUSÃO E CRUZAMENTO ATIVO: Relacionando Anéis, Grafana, Coordenadas e Bases Fixa/Móvel com segurança.")
 
     st.markdown("### 📊 Status Atual das Bases na Nuvem")
     df_fixa_check = load_table("backlog_fixa")
@@ -641,7 +649,7 @@ elif menu == "📥 Upload & Processamento":
         if not f_fmt:
             st.error("A Base Total Fixa FMT é obrigatória.")
         else:
-            with st.spinner("Processando, cruzando FMMT/Grafana e calculando o tempo real..."):
+            with st.spinner("Processando, cruzando FMMT/Grafana, coordenadas e calculando o tempo real..."):
                 st.cache_data.clear() 
                 
                 df_old_fixa = load_table("backlog_fixa")
@@ -807,7 +815,6 @@ elif menu == "📥 Upload & Processamento":
 
                     df_b2b_proc.to_sql('backlog_b2b', engine, if_exists='replace', index=False)
 
-                    # Filtra estritamente os B2B que pertencem ao grupo CAMPO FMMT TSP
                     b2b_tsp = df_b2b_proc[df_b2b_proc["GRUPO_ACIONADO"].astype(str).str.upper().str.contains("CAMPO FMMT TSP", na=False)]
                     b2b_tokens = set(b2b_tsp["TSK"].dropna().astype(str).str.strip().str.upper()).union(set(b2b_tsp["NE_ID"].dropna().astype(str).str.strip().str.upper()))
                     df_fmt["IS_B2B"] = df_fmt.apply(lambda r: "SIM" if str(r["TSK"]).upper() in b2b_tokens or str(r["NE_ID"]).upper() in b2b_tokens else "NÃO", axis=1)
@@ -879,8 +886,8 @@ elif menu == "📂 Backlog Operacional (Fixa)":
     if df.empty:
         st.warning("Nenhuma base Fixa/FMMT encontrada na nuvem. Faça o upload na primeira aba.")
     else:
-        for c in ["DWDM", "ANEL_ABERTO", "IS_B2B", "IS_CRC", "QUADRANTE"]:
-            if c not in df.columns: df[c] = "NÃO"
+        for c in ["DWDM", "ANEL_ABERTO", "IS_B2B", "IS_CRC", "QUADRANTE", "LATITUDE", "LONGITUDE"]:
+            if c not in df.columns: df[c] = "NÃO" if c != "LATITUDE" and c != "LONGITUDE" else 0.0
         if "ORIGEM" not in df.columns: df["ORIGEM"] = "FMT"
 
         cols_backlog = ["TSK", "EVENTO", "END_ID", "NE_ID", "TEMPO_DO_CHAMADO", "FALHA", "STATUS", "OBS", "RESUMO", "TECNICO", "DWDM", "ANEL_ABERTO", "IS_CRC", "QUADRANTE", "ORIGEM"]
@@ -974,20 +981,13 @@ elif menu == "📂 Backlog Operacional (Fixa)":
         with col_b2:
             output = io.BytesIO()
             with pd.ExcelWriter(output, engine="openpyxl") as writer:
-                # Aba de Base Bruta
                 df_bk_view[cols_backlog].to_excel(writer, index=False, sheet_name="Backlog_Fixa_FMMT")
-                
-                # Dinâmica: Resumo por Status
                 if not df_bk_view.empty:
                     df_st = df_bk_view.groupby("STATUS").size().reset_index(name="Quantidade")
                     df_st.to_excel(writer, index=False, sheet_name="Dinâmica_Status")
-                    
-                    # Dinâmica: Resumo Quadrante x Status
                     if "QUADRANTE" in df_bk_view.columns:
                         df_qd = pd.crosstab(df_bk_view["QUADRANTE"].fillna("NÃO INFORMADO"), df_bk_view["STATUS"].fillna("NÃO INFORMADO"), margins=True, margins_name="Total Geral")
                         df_qd.to_excel(writer, sheet_name="Dinâmica_Quadrante")
-                        
-                    # Dinâmica: Resumo por Técnico
                     if "TECNICO" in df_bk_view.columns:
                         tec_view = df_bk_view[df_bk_view["TECNICO"].astype(str).str.strip() != ""]
                         if not tec_view.empty:
@@ -1098,18 +1098,13 @@ elif menu == "📱 Backlog Móvel":
         with col_save_m2:
             output_movel = io.BytesIO()
             with pd.ExcelWriter(output_movel, engine="openpyxl") as writer:
-                # Aba de Base Bruta
                 df_movel_view[cols_movel].to_excel(writer, index=False, sheet_name="Backlog_Movel")
-                
-                # Dinâmicas
                 if not df_movel_view.empty:
                     df_st_m = df_movel_view.groupby("STATUS").size().reset_index(name="Quantidade")
                     df_st_m.to_excel(writer, index=False, sheet_name="Dinâmica_Status")
-                    
                     if "QUADRANTE" in df_movel_view.columns:
                         df_qd_m = pd.crosstab(df_movel_view["QUADRANTE"].fillna("NÃO INFORMADO"), df_movel_view["STATUS"].fillna("NÃO INFORMADO"), margins=True, margins_name="Total Geral")
                         df_qd_m.to_excel(writer, sheet_name="Dinâmica_Quadrante")
-                        
                     if "TECNICO" in df_movel_view.columns:
                         tec_view_m = df_movel_view[df_movel_view["TECNICO"].astype(str).str.strip() != ""]
                         if not tec_view_m.empty:
@@ -1313,22 +1308,16 @@ elif menu == "💼 Gestão B2B":
         with col_save_b2:
             output_b2b = io.BytesIO()
             with pd.ExcelWriter(output_b2b, engine="openpyxl") as writer:
-                # Aba de Base Bruta
                 df_b2b_view[cols_b2b].to_excel(writer, index=False, sheet_name="B2B_Operacao")
-                
-                # Dinâmicas
                 if not df_b2b_view.empty:
                     df_st_b2b = df_b2b_view.groupby("STATUS").size().reset_index(name="Quantidade")
                     df_st_b2b.to_excel(writer, index=False, sheet_name="Dinâmica_Status")
-                    
                     if "GRUPO_ACIONADO" in df_b2b_view.columns:
                         df_grp_b2b = pd.crosstab(df_b2b_view["GRUPO_ACIONADO"].fillna("NÃO INFORMADO"), df_b2b_view["STATUS"].fillna("NÃO INFORMADO"), margins=True, margins_name="Total Geral")
                         df_grp_b2b.to_excel(writer, sheet_name="Dinâmica_Grupos")
-                        
                     if "QUADRANTE" in df_b2b_view.columns:
                         df_qd_b2b = pd.crosstab(df_b2b_view["QUADRANTE"].fillna("NÃO INFORMADO"), df_b2b_view["STATUS"].fillna("NÃO INFORMADO"), margins=True, margins_name="Total Geral")
                         df_qd_b2b.to_excel(writer, sheet_name="Dinâmica_Quadrante")
-                        
                     if "TECNICO" in df_b2b_view.columns:
                         tec_view_b2b = df_b2b_view[df_b2b_view["TECNICO"].astype(str).str.strip() != ""]
                         if not tec_view_b2b.empty:
@@ -1343,9 +1332,6 @@ elif menu == "💼 Gestão B2B":
 elif menu == "📺 Apresentação Executiva":
     st.title("📺 Apresentação Executiva - Painel NOC FMT")
     
-    # ----------------------------------------------------
-    # BLOCO: EXPORTAÇÃO GLOBAL CONSOLIDADA PARA O CLIENTE (EM FORMATO DE TABELA)
-    # ----------------------------------------------------
     st.markdown("### 📥 Relatório Consolidado Completo (Visão Cliente)")
     st.caption("Baixe TODAS as bases atualizadas (Anéis, B2B, CRC, DWDM e Críticos) formatadas como Tabelas Nativas do Excel em um único arquivo.")
     
@@ -1389,7 +1375,6 @@ elif menu == "📺 Apresentação Executiva":
         
         has_data = False
         
-        # 1. Anéis Abertos
         if not df_f_exp.empty and "ANEL_ABERTO" in df_f_exp.columns:
             df_aneis_exp = df_f_exp[df_f_exp["ANEL_ABERTO"] == "SIM"]
             if not df_aneis_exp.empty:
@@ -1399,7 +1384,6 @@ elif menu == "📺 Apresentação Executiva":
                 if "QUADRANTE" in df_aneis_exp.columns and "STATUS" in df_aneis_exp.columns:
                     safe_crosstab_formatted(df_aneis_exp, "QUADRANTE", "STATUS", writer, "Resumo_Aneis", "TblResumoAneis")
                     
-        # 2. DWDM
         if not df_f_exp.empty and "DWDM" in df_f_exp.columns:
             df_dwdm_exp = df_f_exp[df_f_exp["DWDM"] == "SIM"]
             if not df_dwdm_exp.empty:
@@ -1409,7 +1393,6 @@ elif menu == "📺 Apresentação Executiva":
                 if "QUADRANTE" in df_dwdm_exp.columns and "STATUS" in df_dwdm_exp.columns:
                     safe_crosstab_formatted(df_dwdm_exp, "QUADRANTE", "STATUS", writer, "Resumo_DWDM", "TblResumoDWDM")
                     
-        # 3. B2B
         if not df_b_exp.empty:
             has_data = True
             df_b_exp.to_excel(writer, index=False, sheet_name="Dados_B2B")
@@ -1417,7 +1400,6 @@ elif menu == "📺 Apresentação Executiva":
             if "GRUPO_ACIONADO" in df_b_exp.columns and "STATUS" in df_b_exp.columns:
                 safe_crosstab_formatted(df_b_exp, "GRUPO_ACIONADO", "STATUS", writer, "Resumo_B2B", "TblResumoB2B")
                 
-        # 4. CRC
         if not df_c_exp.empty:
             has_data = True
             df_c_exp.to_excel(writer, index=False, sheet_name="Dados_CRC")
@@ -1425,7 +1407,6 @@ elif menu == "📺 Apresentação Executiva":
             if "end_id" in df_c_exp.columns and "status" in df_c_exp.columns:
                 safe_crosstab_formatted(df_c_exp, "end_id", "status", writer, "Resumo_CRC", "TblResumoCRC")
                 
-        # 5. Casos Críticos
         if not df_cr_exp.empty:
             has_data = True
             df_cr_exp.to_excel(writer, index=False, sheet_name="Casos_Criticos")
@@ -1450,9 +1431,6 @@ elif menu == "📺 Apresentação Executiva":
     )
     st.divider()
 
-    # ----------------------------------------------------
-    # PAINEL EXECUTIVO EM TELA
-    # ----------------------------------------------------
     df = load_table("backlog_fixa")
     df_old = load_table("backlog_fixa_previous")
     df_b2b_exec = load_table("backlog_b2b")
@@ -1570,17 +1548,13 @@ elif menu == "📺 Apresentação Executiva":
 
             st.write("")
 
-        # 1. Anéis Abertos
         df_aneis = df[df["ANEL_ABERTO"] == "SIM"]
         render_presentation_card("Anéis Abertos (Alto Impacto)", "🚨", df_aneis, "#DC2626")
 
-        # 2. DWDM
         df_dwdm = df[df["DWDM"] == "SIM"]
         render_presentation_card("Equipamentos DWDM (Alta Capacidade)", "🟣", df_dwdm, "#7C3AED")
 
-        # 3. B2B TSP Separado por Fixa e Móvel
         df_b2b_view = df[df["IS_B2B_TSP"] == "SIM"]
-        
         def is_fixa(val):
             v = str(val).strip().upper()
             return v in ["", "NAN", "NONE", "NULL", "-"]
@@ -1596,9 +1570,109 @@ elif menu == "📺 Apresentação Executiva":
         render_presentation_card("B2B Fixa (CAMPO FMMT TSP)", "🏢", df_b2b_fixa, "#0284C7")
         render_presentation_card("B2B Móvel (CAMPO FMMT TSP)", "📱", df_b2b_movel, "#2563EB")
 
-        # 4. CRC
         df_crc_view = df[df["IS_CRC"] == "SIM"]
         render_presentation_card("Casos com Histórico CRC", "🟢", df_crc_view, "#16A34A")
+
+# ==========================================
+# ABA: MAPA IMPACTO (GEORREFERENCIADO)
+# ==========================================
+elif menu == "🗺️ Mapa Impacto":
+    st.title("🗺️ Mapa de Impacto Georreferenciado")
+    st.caption("Visualização geoespacial dos chamados da rede fixa com base nas coordenadas de Latitude e Longitude.")
+
+    df_map = load_table("backlog_fixa")
+
+    if df_map.empty:
+        st.warning("Nenhuma base Fixa carregada na nuvem.")
+    else:
+        for c in ["LATITUDE", "LONGITUDE", "QUADRANTE", "ANEL_ABERTO", "STATUS", "TSK", "NE_ID", "FALHA"]:
+            if c not in df_map.columns:
+                df_map[c] = 0.0 if c in ["LATITUDE", "LONGITUDE"] else "NÃO INFORMADO"
+
+        df_map["LATITUDE"] = pd.to_numeric(df_map["LATITUDE"], errors='coerce').fillna(0.0)
+        df_map["LONGITUDE"] = pd.to_numeric(df_map["LONGITUDE"], errors='coerce').fillna(0.0)
+
+        # Filtra apenas registros com coordenadas válidas
+        df_geo = df_map[(df_map["LATITUDE"] != 0.0) & (df_map["LONGITUDE"] != 0.0)].copy()
+
+        mc1, mc2, mc3 = st.columns(3)
+        mc1.metric("Total de Chamados na Base", len(df_map))
+        mc2.metric("Com Coordenadas Mapeadas", len(df_geo))
+        mc3.metric("Sem Coordenadas Válidas", len(df_map) - len(df_geo))
+
+        st.divider()
+
+        if len(df_geo) == 0:
+            st.warning("⚠️ Nenhum registro possui coordenadas (Latitude/Longitude) preenchidas válidas na planilha FMT atual.")
+        else:
+            # Filtros para o mapa
+            col_f1, col_f2, col_f3 = st.columns(3)
+            with col_f1:
+                st_map_opts = ["Todos"] + sorted(list(df_geo["STATUS"].dropna().unique()))
+                sel_st_map = st.selectbox("Filtrar por Status:", options=st_map_opts, key="map_st")
+            with col_f2:
+                quad_map_opts = ["Todos"] + sorted(list(df_geo["QUADRANTE"].dropna().unique()))
+                sel_qd_map = st.selectbox("Filtrar por Quadrante (Q1/Q2/Q3/Q4):", options=quad_map_opts, key="map_qd")
+            with col_f3:
+                sel_anel_map = st.selectbox("Filtrar por Anel Aberto:", options=["Todos", "SIM", "NÃO"], key="map_anel")
+
+            if sel_st_map != "Todos":
+                df_geo = df_geo[df_geo["STATUS"] == sel_st_map]
+            if sel_qd_map != "Todos":
+                df_geo = df_geo[df_geo["QUADRANTE"] == sel_qd_map]
+            if sel_anel_map != "Todos":
+                df_geo = df_geo[df_geo["ANEL_ABERTO"] == sel_anel_map]
+
+            # Atribui cores com base no Status ou Anel Aberto para destacar no PyDeck
+            def get_color(row):
+                if str(row.get("ANEL_ABERTO")).upper() == "SIM":
+                    return [220, 38, 38, 200]  # Vermelho forte para Anel Aberto
+                st_val = str(row.get("STATUS")).upper()
+                if "ENCERRADO" in st_val:
+                    return [22, 163, 74, 180]  # Verde
+                elif "INICIADO" in st_val or "ACIONADO" in st_val:
+                    return [249, 115, 22, 200]  # Laranja
+                return [37, 99, 235, 200]      # Azul padrão
+
+            df_geo["color"] = df_geo.apply(get_color, axis=1)
+
+            # Centraliza o mapa na média das coordenadas filtradas (ou padrão São Paulo)
+            lat_center = df_geo["LATITUDE"].mean() if not df_geo.empty else -23.5505
+            lon_center = df_geo["LONGITUDE"].mean() if not df_geo.empty else -46.6333
+
+            layer = pdk.Layer(
+                "ScatterplotLayer",
+                data=df_geo,
+                get_position='[LONGITUDE, LATITUDE]',
+                get_color='color',
+                get_radius=400,  # Raio do ponto em metros
+                pickable=True,
+                auto_highlight=True,
+            )
+
+            view_state = pdk.ViewState(
+                latitude=lat_center,
+                longitude=lon_center,
+                zoom=10,
+                pitch=0,
+            )
+
+            r = pdk.Deck(
+                layers=[layer],
+                initial_view_state=view_state,
+                tooltip={
+                    "html": "<b>TSK:</b> {TSK} <br/><b>NE ID:</b> {NE_ID} <br/><b>Quadrante:</b> {QUADRANTE} <br/><b>Status:</b> {STATUS} <br/><b>Anel Aberto:</b> {ANEL_ABERTO} <br/><b>Falha:</b> {FALHA}",
+                    "style": {"backgroundColor": "steelblue", "color": "white"}
+                }
+            )
+
+            st.pydeck_chart(r)
+            st.caption("🔴 Vermelho: Anéis Abertos | 🟠 Laranja: Acionados/Iniciados | 🟢 Verde: Encerrados | 🔵 Azul: Demais")
+
+            st.write("")
+            st.markdown("### 📋 Tabela Filtrada do Mapa")
+            cols_map_show = [c for c in ["TSK", "NE_ID", "QUADRANTE", "LATITUDE", "LONGITUDE", "STATUS", "ANEL_ABERTO", "FALHA"] if c in df_geo.columns]
+            st.dataframe(df_geo[cols_map_show], use_container_width=True, hide_index=True)
 
 # ==========================================
 # ABA NOVO: CASOS CRÍTICOS (MANUAL)
