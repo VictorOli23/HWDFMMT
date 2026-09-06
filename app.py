@@ -9,6 +9,7 @@ import altair as alt
 from datetime import datetime
 import base64
 import time
+from openpyxl.worksheet.table import Table, TableStyleInfo
 
 # ==========================================
 # 1. CONFIGURAÇÃO DA PÁGINA E CSS
@@ -279,7 +280,7 @@ if not st.session_state['logged_in']:
             st.markdown("---")
             st.markdown("""
             **Atualizações Recentes:**
-            * 🟢 Novo Export Consolidado Global (Com todas as Dinâmicas) na aba Apresentação Executiva.
+            * 🟢 Tabelas Nativas Formatadas do Excel ativas no Relatório Consolidado.
             * 🟢 Geração Automática de Tabelas Dinâmicas no Export Excel.
             * 🟢 Filtro isolado para Agregadores (RMAG/RNAG) ativo.
             * 🔄 Handover Automático operando com sucesso.
@@ -1343,16 +1344,44 @@ elif menu == "📺 Apresentação Executiva":
     st.title("📺 Apresentação Executiva - Painel NOC FMT")
     
     # ----------------------------------------------------
-    # BLOCO: EXPORTAÇÃO GLOBAL CONSOLIDADA PARA O CLIENTE
+    # BLOCO: EXPORTAÇÃO GLOBAL CONSOLIDADA PARA O CLIENTE (EM FORMATO DE TABELA)
     # ----------------------------------------------------
     st.markdown("### 📥 Relatório Consolidado Completo (Visão Cliente)")
-    st.caption("Baixe TODAS as bases atualizadas (Anéis, B2B, CRC, DWDM e Críticos) com suas tabelas dinâmicas prontas em um único arquivo Excel.")
+    st.caption("Baixe TODAS as bases atualizadas (Anéis, B2B, CRC, DWDM e Críticos) formatadas como Tabelas Nativas do Excel em um único arquivo.")
     
-    def safe_crosstab(df, col1, col2, writer, sheet_name):
+    def format_as_excel_table(writer, df, sheet_name, table_name):
+        ws = writer.sheets[sheet_name]
+        if df.empty:
+            return
+        max_row = len(df) + 1
+        max_col = len(df.columns)
+        
+        # Converte letras de colunas (ex: 1 -> A, 2 -> B)
+        def get_col_letter(n):
+            string = ""
+            while n > 0:
+                n, remainder = divmod(n - 1, 26)
+                string = chr(65 + remainder) + string
+            return string
+            
+        col_end_letter = get_col_letter(max_col)
+        ref = f"A1:{col_end_letter}{max_row}"
+        
+        # Limpa caracteres especiais do nome da tabela do Excel (sem espaços ou acentos)
+        clean_tname = re.sub(r'[^a-zA-Z0-9_]', '', table_name)
+        
+        tab = Table(displayName=clean_tname, ref=ref)
+        style = TableStyleInfo(name="TableStyleMedium9", showFirstColumn=False, showLastColumn=False, showRowStripes=True, showColumnStripes=True)
+        tab.tableStyleInfo = style
+        ws.add_table(tab)
+
+    def safe_crosstab_formatted(df, col1, col2, writer, sheet_name, table_name):
         c1 = df[col1] if col1 in df.columns else pd.Series(["NÃO INFORMADO"] * len(df), name=col1)
         c2 = df[col2] if col2 in df.columns else pd.Series(["NÃO INFORMADO"] * len(df), name=col2)
-        pd.crosstab(c1.fillna("NÃO INFORMADO"), c2.fillna("NÃO INFORMADO"), margins=True, margins_name="Total Geral").to_excel(writer, sheet_name=sheet_name)
-    
+        ct = pd.crosstab(c1.fillna("NÃO INFORMADO"), c2.fillna("NÃO INFORMADO"), margins=True, margins_name="Total Geral")
+        ct.to_excel(writer, sheet_name=sheet_name, index=True)
+        format_as_excel_table(writer, ct.reset_index(), sheet_name, table_name)
+
     output_geral = io.BytesIO()
     with pd.ExcelWriter(output_geral, engine="openpyxl") as writer:
         df_f_exp = load_table("backlog_fixa")
@@ -1368,8 +1397,9 @@ elif menu == "📺 Apresentação Executiva":
             if not df_aneis_exp.empty:
                 has_data = True
                 df_aneis_exp.to_excel(writer, index=False, sheet_name="Dados_Aneis")
+                format_as_excel_table(writer, df_aneis_exp, "Dados_Aneis", "TblAneis")
                 if "QUADRANTE" in df_aneis_exp.columns and "STATUS" in df_aneis_exp.columns:
-                    safe_crosstab(df_aneis_exp, "QUADRANTE", "STATUS", writer, "Resumo_Aneis")
+                    safe_crosstab_formatted(df_aneis_exp, "QUADRANTE", "STATUS", writer, "Resumo_Aneis", "TblResumoAneis")
                     
         # 2. DWDM
         if not df_f_exp.empty and "DWDM" in df_f_exp.columns:
@@ -1377,36 +1407,43 @@ elif menu == "📺 Apresentação Executiva":
             if not df_dwdm_exp.empty:
                 has_data = True
                 df_dwdm_exp.to_excel(writer, index=False, sheet_name="Dados_DWDM")
+                format_as_excel_table(writer, df_dwdm_exp, "Dados_DWDM", "TblDWDM")
                 if "QUADRANTE" in df_dwdm_exp.columns and "STATUS" in df_dwdm_exp.columns:
-                    safe_crosstab(df_dwdm_exp, "QUADRANTE", "STATUS", writer, "Resumo_DWDM")
+                    safe_crosstab_formatted(df_dwdm_exp, "QUADRANTE", "STATUS", writer, "Resumo_DWDM", "TblResumoDWDM")
                     
-        # 3. B2B (Focado em TSP ou Geral)
+        # 3. B2B
         if not df_b_exp.empty:
             has_data = True
             df_b_exp.to_excel(writer, index=False, sheet_name="Dados_B2B")
+            format_as_excel_table(writer, df_b_exp, "Dados_B2B", "TblB2B")
             if "GRUPO_ACIONADO" in df_b_exp.columns and "STATUS" in df_b_exp.columns:
-                safe_crosstab(df_b_exp, "GRUPO_ACIONADO", "STATUS", writer, "Resumo_B2B")
+                safe_crosstab_formatted(df_b_exp, "GRUPO_ACIONADO", "STATUS", writer, "Resumo_B2B", "TblResumoB2B")
                 
         # 4. CRC
         if not df_c_exp.empty:
             has_data = True
             df_c_exp.to_excel(writer, index=False, sheet_name="Dados_CRC")
+            format_as_excel_table(writer, df_c_exp, "Dados_CRC", "TblCRC")
             if "end_id" in df_c_exp.columns and "status" in df_c_exp.columns:
-                safe_crosstab(df_c_exp, "end_id", "status", writer, "Resumo_CRC")
+                safe_crosstab_formatted(df_c_exp, "end_id", "status", writer, "Resumo_CRC", "TblResumoCRC")
                 
         # 5. Casos Críticos
         if not df_cr_exp.empty:
             has_data = True
             df_cr_exp.to_excel(writer, index=False, sheet_name="Casos_Criticos")
+            format_as_excel_table(writer, df_cr_exp, "Casos_Criticos", "TblCriticos")
             if "TIPO" in df_cr_exp.columns:
-                df_cr_exp.groupby("TIPO").size().reset_index(name="Quantidade").to_excel(writer, index=False, sheet_name="Resumo_Criticos")
+                df_res_crit = df_cr_exp.groupby("TIPO").size().reset_index(name="Quantidade")
+                df_res_crit.to_excel(writer, index=False, sheet_name="Resumo_Criticos")
+                format_as_excel_table(writer, df_res_crit, "Resumo_Criticos", "TblResumoCriticos")
                 
-        # Garantia de export vazio para evitar crash
         if not has_data:
-            pd.DataFrame({"Mensagem": ["Nenhum dado encontrado no banco."]}).to_excel(writer, index=False, sheet_name="Sem_Dados")
+            df_empty = pd.DataFrame({"Mensagem": ["Nenhum dado encontrado no banco."]j}) if 'j' not in locals() else pd.DataFrame({"Mensagem": ["Nenhum dado encontrado no banco."]});
+            df_empty.to_excel(writer, index=False, sheet_name="Sem_Dados")
+            format_as_excel_table(writer, df_empty, "Sem_Dados", "TblSemDados")
             
     st.download_button(
-        label="📥 Gerar e Baixar Relatório Consolidado (Tudo em 1)", 
+        label="📥 Gerar e Baixar Relatório Consolidado (Tudo em 1 - Em Formato de Tabela)", 
         data=output_geral.getvalue(), 
         file_name=f"Relatorio_Geral_Cliente_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx", 
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -1429,7 +1466,6 @@ elif menu == "📺 Apresentação Executiva":
         for c in ["DWDM", "ANEL_ABERTO", "IS_B2B", "IS_CRC", "QUADRANTE"]:
             if c not in df.columns: df[c] = "NÃO"
 
-        # Garante que na Apresentação Executiva o B2B considere estritamente CAMPO FMMT TSP
         if not df_b2b_exec.empty:
             df_b2b_exec.columns = [str(col).upper() for col in df_b2b_exec.columns]
             if "GRUPO_ACIONADO" in df_b2b_exec.columns:
@@ -1535,9 +1571,6 @@ elif menu == "📺 Apresentação Executiva":
                     st.caption(f"Nenhum chamado '{sel_tab}' encontrado.")
 
             st.write("")
-
-        def b2b_tsp_tokens(r, tokens): # auxiliar inline
-            return tokens
 
         # 1. Anéis Abertos
         df_aneis = df[df["ANEL_ABERTO"] == "SIM"]
