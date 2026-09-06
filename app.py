@@ -1642,7 +1642,6 @@ elif menu == "🤖 Causa Raiz IA":
     st.title("🤖 Tags Automáticas de Causa Raiz por IA (Gemini API)")
     st.caption("Utilize Inteligência Artificial para analisar os alarmes, falhas e descrições dos chamados pendentes e gerar etiquetas automáticas de Causa Raiz e Recomendações de Ação.")
 
-    # Configuração da Chave da API do Gemini
     gemini_key = os.environ.get("GEMINI_API_KEY")
     if not gemini_key:
         try:
@@ -1650,13 +1649,12 @@ elif menu == "🤖 Causa Raiz IA":
         except:
             gemini_key = ""
 
-    api_key_input = st.text_input("🔑 Chave da API do Gemini (Google AI Studio):", value=gemini_key, type="password", placeholder="AIzaSy...")
+    api_key_input = st.text_input("🔑 Chave da API do Gemini (Google AI Studio):", value=gemini_key, type="password", placeholder="AQ...")
     
     df_ai = load_table("backlog_fixa")
     if df_ai.empty:
         st.warning("Nenhuma base Fixa carregada na nuvem para análise.")
     else:
-        # Filtra apenas os pendentes para otimizar
         df_ai_pendentes = df_ai[~df_ai["STATUS"].isin(["Tramitado", "Encerrado"])].copy()
         st.info(f"📊 Foram encontrados **{len(df_ai_pendentes)} chamados pendentes** aptos para análise automática de Causa Raiz.")
 
@@ -1665,58 +1663,62 @@ elif menu == "🤖 Causa Raiz IA":
                 st.error("⚠️ Por favor, insira uma Chave de API válida do Gemini.")
             else:
                 with st.spinner("🤖 Analisando alarmes e gerando tags de causa raiz via Gemini..."):
-                    genai.configure(api_key=api_key_input)
-                    # Modelo otimizado para texto rápido
-                    model = genai.GenerativeModel('gemini-1.5-flash')
-                    
-                    resultados_ia = []
-                    # Analisa em lotes ou os primeiros 20 chamados pendentes para evitar timeout
-                    amostra = df_ai_pendentes.head(25)
-                    
-                    for _, row in amostra.iterrows():
-                        tsk = row.get("TSK", "")
-                        ne = row.get("NE_ID", "")
-                        falha = row.get("FALHA", "")
-                        obs = row.get("OBS", "")
+                    try:
+                        genai.configure(api_key=api_key_input.strip())
+                        # Configurando explicitamente para usar o gemini-1.5-flash com segurança
+                        model = genai.GenerativeModel(
+                            model_name='gemini-1.5-flash',
+                            system_instruction="Você é um Especialista Sênior em Operações de Telecomunicações e Redes Fixas / DWDM / GPON. Retorne estritamente o formato solicitado."
+                        )
                         
-                        prompt = f"""
-                        Você é um Especialista Sênior em Operações de Telecomunicações e Redes Fixas / DWDM / GPON.
-                        Analise o seguinte chamado técnico e retorne EXATAMENTE duas informações curtas separadas por barra vertical (|):
-                        1. Tag Principal da Causa Raiz (Ex: Falha de Hardware, Cabo Rompido, Queda de Energia, Falha de Transmissão DWDM, Configuração de Roteamento, Estouro de Banda).
-                        2. Ação de Contorno Recomendada em até 8 palavras.
+                        resultados_ia = []
+                        amostra = df_ai_pendentes.head(25)
+                        
+                        for _, row in amostra.iterrows():
+                            tsk = row.get("TSK", "")
+                            ne = row.get("NE_ID", "")
+                            falha = row.get("FALHA", "")
+                            obs = row.get("OBS", "")
+                            
+                            prompt = f"""Analise o chamado abaixo e retorne EXATAMENTE duas informações curtas separadas por barra vertical (|):
+1. Tag Principal da Causa Raiz (Ex: Falha de Hardware, Cabo Rompido, Queda de Energia, Falha de Transmissão DWDM, Configuração de Roteamento).
+2. Ação de Contorno Recomendada em até 8 palavras.
 
-                        Dados do Chamado:
-                        - TSK: {tsk}
-                        - Elemento (NE ID): {ne}
-                        - Alarme/Falha: {falha}
-                        - Observações: {obs}
-                        """
-                        try:
-                            response = model.generate_content(prompt)
-                            partes = response.text.strip().split("|")
-                            causa = partes[0].strip() if len(partes) > 0 else "Análise Indeterminada"
-                            acao = partes[1].strip() if len(partes) > 1 else "Verificar com equipe de campo"
-                        except Exception as e:
-                            causa = "Erro na API Gemini"
-                            acao = "Revisar manualmente"
+Dados do Chamado:
+- TSK: {tsk}
+- Elemento (NE ID): {ne}
+- Alarme/Falha: {falha}
+- Observações: {obs}"""
 
-                        resultados_ia.append({
-                            "TSK": tsk,
-                            "NE_ID": ne,
-                            "FALHA": falha,
-                            "CAUSA_RAIZ_IA": causa,
-                            "ACAO_RECOMENDADA_IA": acao
-                        })
-                    
-                    df_resultado_ia = pd.DataFrame(resultados_ia)
-                    st.success("✅ Análise de Causa Raiz concluída com sucesso!")
-                    st.dataframe(df_resultado_ia, use_container_width=True, hide_index=True)
-                    
-                    output_ia = io.BytesIO()
-                    with pd.ExcelWriter(output_ia, engine="openpyxl") as writer:
-                        df_resultado_ia.to_excel(writer, index=False, sheet_name="Causa_Raiz_IA")
-                    st.download_button("📥 Baixar Relatório de Causa Raiz (Excel)", data=output_ia.getvalue(), file_name=f"Relatorio_Causa_Raiz_IA_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+                            try:
+                                response = model.generate_content(prompt)
+                                texto_resp = response.text.strip()
+                                partes = texto_resp.split("|")
+                                causa = partes[0].strip() if len(partes) > 0 else "Análise Indeterminada"
+                                acao = partes[1].strip() if len(partes) > 1 else "Verificar com equipe de campo"
+                            except Exception as sub_err:
+                                causa = f"Erro IA: {str(sub_err)[:30]}"
+                                acao = "Revisar manualmente"
 
+                            resultados_ia.append({
+                                "TSK": tsk,
+                                "NE_ID": ne,
+                                "FALHA": falha,
+                                "CAUSA_RAIZ_IA": causa,
+                                "ACAO_RECOMENDADA_IA": acao
+                            })
+                        
+                        df_resultado_ia = pd.DataFrame(resultados_ia)
+                        st.success("✅ Análise de Causa Raiz concluída com sucesso!")
+                        st.dataframe(df_resultado_ia, use_container_width=True, hide_index=True)
+                        
+                        output_ia = io.BytesIO()
+                        with pd.ExcelWriter(output_ia, engine="openpyxl") as writer:
+                            df_resultado_ia.to_excel(writer, index=False, sheet_name="Causa_Raiz_IA")
+                        st.download_button("📥 Baixar Relatório de Causa Raiz (Excel)", data=output_ia.getvalue(), file_name=f"Relatorio_Causa_Raiz_IA_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
+                    except Exception as err:
+                        st.error(f"❌ Falha ao conectar com a API do Gemini: {err}")
 # ==========================================
 # ABA: MAPA IMPACTO (GEORREFERENCIADO - FIXA)
 # ==========================================
