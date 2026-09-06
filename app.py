@@ -282,7 +282,7 @@ if not st.session_state['logged_in']:
             st.markdown("""
             **Atualizações Recentes:**
             * 📈 **Evolução por Dia da Semana (Seg x Ter x Qua)** nos cards de Anéis e DWDM.
-            * 🗺️ Mapas Interativos de Impacto e Geral ativos.
+            * 🗺️ Mapas Interativos de Impacto e Geral ativos com divisões de Quadrantes (Q1 a Q4).
             """)
 
     with col_login:
@@ -1630,7 +1630,7 @@ elif menu == "📺 Apresentação Executiva":
 # ==========================================
 elif menu == "🗺️ Mapa Impacto":
     st.title("🗺️ Mapa de Impacto (Rede Fixa)")
-    st.caption("Visualização geoespacial dos chamados da rede fixa com base nas coordenadas de Latitude e Longitude.")
+    st.caption("Visualização geoespacial dos chamados da rede fixa com base nas coordenadas de Latitude e Longitude, incluindo as linhas divisórias corporativas de quadrantes (Q1 a Q4).")
 
     df_map = load_table("backlog_fixa")
 
@@ -1688,7 +1688,14 @@ elif menu == "🗺️ Mapa Impacto":
             lat_center = df_geo["LATITUDE"].mean() if not df_geo.empty else -23.5505
             lon_center = df_geo["LONGITUDE"].mean() if not df_geo.empty else -46.6333
 
-            layer = pdk.Layer(
+            # Linhas divisórias dos Quadrantes baseadas no centro da Capital de SP (-23.5505, -46.6333)
+            # Linha Vertical (Divide Leste/Oeste -> Q1/Q2 vs Q3/Q4) e Linha Horizontal (Divide Norte/Sul -> Q1/Q2 vs Q3/Q4)
+            lines_data = [
+                {"path": [[-47.5, lat_center], [-45.5, lat_center]], "name": "Linha Leste-Oeste"}, # Horizontal
+                {"path": [[lon_center, -24.2], [lon_center, -22.8]], "name": "Linha Norte-Sul"}     # Vertical
+            ]
+
+            scatter_layer = pdk.Layer(
                 "ScatterplotLayer",
                 data=df_geo,
                 get_position='[LONGITUDE, LATITUDE]',
@@ -1698,9 +1705,19 @@ elif menu == "🗺️ Mapa Impacto":
                 auto_highlight=True,
             )
 
+            line_layer = pdk.Layer(
+                "PathLayer",
+                data=lines_data,
+                get_path="path",
+                get_color=[255, 255, 0, 220], # Amarelo visível para marcar as divisas
+                width_scale=20,
+                width_min_pixels=3,
+                pickable=False
+            )
+
             view_state = pdk.ViewState(latitude=lat_center, longitude=lon_center, zoom=10, pitch=0)
             r = pdk.Deck(
-                layers=[layer],
+                layers=[line_layer, scatter_layer],
                 initial_view_state=view_state,
                 tooltip={
                     "html": "<b>TSK:</b> {TSK} <br/><b>NE ID:</b> {NE_ID} <br/><b>Quadrante:</b> {QUADRANTE} <br/><b>Status:</b> {STATUS} <br/><b>Anel Aberto:</b> {ANEL_ABERTO}",
@@ -1709,7 +1726,7 @@ elif menu == "🗺️ Mapa Impacto":
             )
 
             st.pydeck_chart(r)
-            st.caption("🔴 Vermelho: Anéis Abertos | 🟠 Laranja: Acionados/Iniciados | 🟢 Verde: Encerrados | 🔵 Azul: Demais")
+            st.caption("🟡 Linhas Amarelas: Divisórias Metropólitanas de Quadrantes | 🔴 Vermelho: Anéis Abertos | 🟠 Laranja: Acionados/Iniciados | 🟢 Verde: Encerrados")
 
             st.write("")
             st.markdown("### 📋 Tabela Filtrada do Mapa (Fixa)")
@@ -1721,7 +1738,7 @@ elif menu == "🗺️ Mapa Impacto":
 # ==========================================
 elif menu == "🗺️ Mapa Geral":
     st.title("🗺️ Mapa Geral de Chamados (Rede Móvel / FMMT)")
-    st.caption("Visualização geoespacial completa de todos os chamados da base FMMT georreferenciados.")
+    st.caption("Visualização geoespacial completa de todos os chamados da base FMMT georreferenciados com divisões de quadrantes.")
 
     df_map_fmmt = load_table("backlog_fmmt")
 
@@ -1773,7 +1790,12 @@ elif menu == "🗺️ Mapa Geral":
             lat_center = df_geo_fmmt["LATITUDE"].mean() if not df_geo_fmmt.empty else -23.5505
             lon_center = df_geo_fmmt["LONGITUDE"].mean() if not df_geo_fmmt.empty else -46.6333
 
-            layer_f = pdk.Layer(
+            lines_data_f = [
+                {"path": [[-47.5, lat_center], [-45.5, lat_center]], "name": "Linha Leste-Oeste"},
+                {"path": [[lon_center, -24.2], [lon_center, -22.8]], "name": "Linha Norte-Sul"}
+            ]
+
+            scatter_layer_f = pdk.Layer(
                 "ScatterplotLayer",
                 data=df_geo_fmmt,
                 get_position='[LONGITUDE, LATITUDE]',
@@ -1783,9 +1805,19 @@ elif menu == "🗺️ Mapa Geral":
                 auto_highlight=True,
             )
 
+            line_layer_f = pdk.Layer(
+                "PathLayer",
+                data=lines_data_f,
+                get_path="path",
+                get_color=[255, 255, 0, 220],
+                width_scale=20,
+                width_min_pixels=3,
+                pickable=False
+            )
+
             view_state_f = pdk.ViewState(latitude=lat_center, longitude=lon_center, zoom=10, pitch=0)
             r_f = pdk.Deck(
-                layers=[layer_f],
+                layers=[line_layer_f, scatter_layer_f],
                 initial_view_state=view_state_f,
                 tooltip={
                     "html": "<b>TSK:</b> {TSK} <br/><b>NE ID:</b> {NE_ID} <br/><b>Quadrante:</b> {QUADRANTE} <br/><b>Status:</b> {STATUS} <br/><b>Falha:</b> {FALHA}",
@@ -1794,7 +1826,7 @@ elif menu == "🗺️ Mapa Geral":
             )
 
             st.pydeck_chart(r_f)
-            st.caption("🟠 Laranja: Acionados/Iniciados | 🟢 Verde: Encerrados | 🔵 Azul: Demais")
+            st.caption("🟡 Linhas Amarelas: Divisórias Metropólitanas de Quadrantes | 🟠 Laranja: Acionados/Iniciados | 🟢 Verde: Encerrados | 🔵 Azul: Demais")
 
             st.write("")
             st.markdown("### 📋 Tabela Filtrada do Mapa Geral (FMMT)")
