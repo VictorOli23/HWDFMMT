@@ -1630,7 +1630,7 @@ elif menu == "📺 Apresentação Executiva":
 # ==========================================
 elif menu == "🗺️ Mapa Impacto":
     st.title("🗺️ Mapa de Impacto (Rede Fixa)")
-    st.caption("Visualização geoespacial dos chamados da rede fixa com base nas coordenadas de Latitude e Longitude, incluindo as linhas divisórias corporativas de quadrantes (Q1 a Q4).")
+    st.caption("Visualização geoespacial dos chamados da rede fixa dividida nos 4 quadrantes (Q1 a Q4) exatamente conforme o padrão de atendimento setorial.")
 
     df_map = load_table("backlog_fixa")
 
@@ -1685,14 +1685,13 @@ elif menu == "🗺️ Mapa Impacto":
 
             df_geo["color"] = df_geo.apply(get_color, axis=1)
 
-            lat_center = df_geo["LATITUDE"].mean() if not df_geo.empty else -23.5505
-            lon_center = df_geo["LONGITUDE"].mean() if not df_geo.empty else -46.6333
+            lat_center = -23.5505
+            lon_center = -46.6333
 
-            # Linhas divisórias dos Quadrantes baseadas no centro da Capital de SP (-23.5505, -46.6333)
-            # Linha Vertical (Divide Leste/Oeste -> Q1/Q2 vs Q3/Q4) e Linha Horizontal (Divide Norte/Sul -> Q1/Q2 vs Q3/Q4)
+            # Linhas divisorias em formato de 'X' (Setores Q1, Q2, Q3, Q4) passando pelo centro da capital
             lines_data = [
-                {"path": [[-47.5, lat_center], [-45.5, lat_center]], "name": "Linha Leste-Oeste"}, # Horizontal
-                {"path": [[lon_center, -24.2], [lon_center, -22.8]], "name": "Linha Norte-Sul"}     # Vertical
+                {"path": [[-48.0, lat_center - 0.7], [-45.2, lat_center + 0.7]], "name": "Divisor Noroeste-Sudeste"},
+                {"path": [[-48.0, lat_center + 0.7], [-45.2, lat_center - 0.7]], "name": "Divisor Sudoeste-Nordeste"}
             ]
 
             scatter_layer = pdk.Layer(
@@ -1709,9 +1708,9 @@ elif menu == "🗺️ Mapa Impacto":
                 "PathLayer",
                 data=lines_data,
                 get_path="path",
-                get_color=[255, 255, 0, 220], # Amarelo visível para marcar as divisas
-                width_scale=20,
-                width_min_pixels=3,
+                get_color=[255, 255, 0, 230], # Amarelo destacado igual ao modelo corporativo
+                width_scale=25,
+                width_min_pixels=4,
                 pickable=False
             )
 
@@ -1726,7 +1725,7 @@ elif menu == "🗺️ Mapa Impacto":
             )
 
             st.pydeck_chart(r)
-            st.caption("🟡 Linhas Amarelas: Divisórias Metropólitanas de Quadrantes | 🔴 Vermelho: Anéis Abertos | 🟠 Laranja: Acionados/Iniciados | 🟢 Verde: Encerrados")
+            st.caption("🟡 Linhas Amarelas: Divisórias Setoriais de Quadrantes (Q1 a Q4) | 🔴 Vermelho: Anéis Abertos | 🟠 Laranja: Acionados/Iniciados | 🟢 Verde: Encerrados")
 
             st.write("")
             st.markdown("### 📋 Tabela Filtrada do Mapa (Fixa)")
@@ -1738,7 +1737,7 @@ elif menu == "🗺️ Mapa Impacto":
 # ==========================================
 elif menu == "🗺️ Mapa Geral":
     st.title("🗺️ Mapa Geral de Chamados (Rede Móvel / FMMT)")
-    st.caption("Visualização geoespacial completa de todos os chamados da base FMMT georreferenciados com divisões de quadrantes.")
+    st.caption("Visualização geoespacial completa com as divisões setoriais dos quadrantes (Q1 a Q4) para a região metropolitana e capital.")
 
     df_map_fmmt = load_table("backlog_fmmt")
 
@@ -1787,12 +1786,12 @@ elif menu == "🗺️ Mapa Geral":
 
             df_geo_fmmt["color"] = df_geo_fmmt.apply(get_color_fmmt, axis=1)
 
-            lat_center = df_geo_fmmt["LATITUDE"].mean() if not df_geo_fmmt.empty else -23.5505
-            lon_center = df_geo_fmmt["LONGITUDE"].mean() if not df_geo_fmmt.empty else -46.6333
+            lat_center = -23.5505
+            lon_center = -46.6333
 
             lines_data_f = [
-                {"path": [[-47.5, lat_center], [-45.5, lat_center]], "name": "Linha Leste-Oeste"},
-                {"path": [[lon_center, -24.2], [lon_center, -22.8]], "name": "Linha Norte-Sul"}
+                {"path": [[-48.0, lat_center - 0.7], [-45.2, lat_center + 0.7]], "name": "Divisor Noroeste-Sudeste"},
+                {"path": [[-48.0, lat_center + 0.7], [-45.2, lat_center - 0.7]], "name": "Divisor Sudoeste-Nordeste"}
             ]
 
             scatter_layer_f = pdk.Layer(
@@ -1809,9 +1808,9 @@ elif menu == "🗺️ Mapa Geral":
                 "PathLayer",
                 data=lines_data_f,
                 get_path="path",
-                get_color=[255, 255, 0, 220],
-                width_scale=20,
-                width_min_pixels=3,
+                get_color=[255, 255, 0, 230],
+                width_scale=25,
+                width_min_pixels=4,
                 pickable=False
             )
 
@@ -1826,7 +1825,7 @@ elif menu == "🗺️ Mapa Geral":
             )
 
             st.pydeck_chart(r_f)
-            st.caption("🟡 Linhas Amarelas: Divisórias Metropólitanas de Quadrantes | 🟠 Laranja: Acionados/Iniciados | 🟢 Verde: Encerrados | 🔵 Azul: Demais")
+            st.caption("🟡 Linhas Amarelas: Divisórias Setoriais de Quadrantes (Q1 a Q4) | 🟠 Laranja: Acionados/Iniciados | 🟢 Verde: Encerrados | 🔵 Azul: Demais")
 
             st.write("")
             st.markdown("### 📋 Tabela Filtrada do Mapa Geral (FMMT)")
