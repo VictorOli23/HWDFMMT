@@ -282,7 +282,7 @@ if not st.session_state['logged_in']:
             st.markdown("""
             **Atualizações Recentes:**
             * 🗺️ Nova aba de **Mapa de Impacto (Georreferenciado)** ativa.
-            * 🟢 Tabelas Nativas Formatadas do Excel ativas no Relatório Consolidado.
+            * 🟢 Tratamento de Coordenadas com apóstrofo (`'`) corrigido.
             * 🔄 Handover Automático operando com sucesso.
             """)
 
@@ -423,7 +423,9 @@ def get_single_series(df, col_name_hints, fallback_val=""):
 
 def get_single_series_numeric(df, col_name_hints, fallback_val=0.0):
     s = get_single_series(df, col_name_hints, str(fallback_val))
-    return pd.to_numeric(s.str.replace(',', '.'), errors='coerce').fillna(fallback_val)
+    # Remove apóstrofos (' ou "), espaços extras, substitui vírgula por ponto e converte para float mantendo o sinal negativo
+    cleaned = s.astype(str).str.replace(r"['\"]", "", regex=True).str.strip().str.replace(',', '.', regex=False)
+    return pd.to_numeric(cleaned, errors='coerce').fillna(fallback_val)
 
 def extrair_colunas(df):
     if df.empty:
@@ -667,7 +669,15 @@ elif menu == "📥 Upload & Processamento":
                 if f_fmmt:
                     df_fmmt_raw = load_file(f_fmmt, ["FMMT", "MOVEL", "SMART"])
                     if not df_fmmt_raw.empty: 
-                        df_fmmt_raw.to_sql('backlog_fmmt', engine, if_exists='replace', index=False)
+                        # Processa FMMT de forma totalmente isolada para não misturar com a Fixa
+                        df_fmmt_ext = pd.DataFrame(extrair_colunas(df_fmmt_raw))
+                        df_fmmt_ext["ORIGEM"] = "FMMT"
+                        df_fmmt_ext["DWDM"] = "NÃO"
+                        df_fmmt_ext["STATUS"] = df_fmmt_ext["STATUS"].apply(categorize_status)
+                        df_fmmt_ext["RESUMO"] = df_fmmt_ext["RESUMO"].apply(lambda r: "Em Campo" if "CAMPO" in str(r).upper() else ("Tramitado" if "TRAMITADO" in str(r).upper() else ("Encerrado" if "ENCERRADO" in str(r).upper() else str(r))))
+                        df_fmmt_ext = df_fmmt_ext[df_fmmt_ext["TSK"].astype(str).str.strip() != ""]
+                        df_fmmt_ext = df_fmmt_ext.drop_duplicates(subset=["TSK"], keep='first')
+                        df_fmmt_ext.to_sql('backlog_fmmt', engine, if_exists='replace', index=False)
 
                 df_graf_raw = pd.DataFrame()
                 if f_grafana:
@@ -685,6 +695,7 @@ elif menu == "📥 Upload & Processamento":
 
                 quad_map = get_quadrantes_map()
                 
+                # Processamento exclusivo da Base Fixa FMT
                 df_fmt = pd.DataFrame(extrair_colunas(df_fmt_raw))
                 df_fmt["ORIGEM"] = "FMT"
                 
@@ -700,22 +711,6 @@ elif menu == "📥 Upload & Processamento":
                 df_fmt["QUADRANTE"] = df_fmt["QUADRANTE"].fillna(df_fmt["END_ID"].astype(str).apply(lambda x: re.search(r'(QD\s*\d+|ANF\s*\d+)', str(x), re.IGNORECASE).group(0).upper() if re.search(r'(QD\s*\d+|ANF\s*\d+)', str(x), re.IGNORECASE) else "NÃO INFORMADO"))
                 
                 df_fmt["TEMPO_DO_CHAMADO"] = df_fmt.apply(calculate_tempo_chamado, axis=1)
-
-                if f_fmmt:
-                    df_fmmt_processed = load_file(f_fmmt, ["FMMT", "MOVEL", "SMART"])
-                    if not df_fmmt_processed.empty:
-                        df_fmmt_ext = pd.DataFrame(extrair_colunas(df_fmmt_processed))
-                        df_fmmt_ext["ORIGEM"] = "FMMT"
-                        df_fmmt_ext["DWDM"] = "NÃO"
-                        df_fmmt_ext["STATUS"] = df_fmmt_ext["STATUS"].apply(categorize_status)
-                        df_fmmt_ext["RESUMO"] = df_fmmt_ext["RESUMO"].apply(lambda r: "Em Campo" if "CAMPO" in str(r).upper() else ("Tramitado" if "TRAMITADO" in str(r).upper() else ("Encerrado" if "ENCERRADO" in str(r).upper() else str(r))))
-                        df_fmmt_ext = df_fmmt_ext[df_fmmt_ext["TSK"].astype(str).str.strip() != ""]
-                        df_fmmt_ext["QUADRANTE"] = df_fmmt_ext["END_ID"].astype(str).str.strip().str.upper().map(quad_map)
-                        df_fmmt_ext["QUADRANTE"] = df_fmmt_ext["QUADRANTE"].fillna(df_fmmt_ext["END_ID"].astype(str).apply(lambda x: re.search(r'(QD\s*\d+|ANF\s*\d+)', str(x), re.IGNORECASE).group(0).upper() if re.search(r'(QD\s*\d+|ANF\s*\d+)', str(x), re.IGNORECASE) else "NÃO INFORMADO"))
-                        df_fmmt_ext["TEMPO_DO_CHAMADO"] = df_fmmt_ext.apply(calculate_tempo_chamado, axis=1)
-                        
-                        df_fmt = pd.concat([df_fmt, df_fmmt_ext], ignore_index=True)
-                        df_fmt = df_fmt.drop_duplicates(subset=["TSK"], keep='first')
 
                 if not df_old_fixa.empty:
                     dict_st = dict(zip(df_old_fixa["TSK"], df_old_fixa["STATUS"]))
@@ -831,7 +826,7 @@ elif menu == "📥 Upload & Processamento":
                 df_fmt.to_sql('backlog_fixa', engine, if_exists='replace', index=False)
                 aneis_count = (df_fmt["ANEL_ABERTO"] == "SIM").sum()
                 
-                st.success(f"✅ Processamento Concluído! Bases FMT e FMMT fundidas com sucesso.\nAnéis Abertos cruzados: {aneis_count}")
+                st.success(f"✅ Processamento Concluído! Base Fixa FMT processada com sucesso.\nAnéis Abertos cruzados: {aneis_count}")
 
                 if f_movel_backlog:
                     df_movel_raw = load_file(f_movel_backlog, ["MOVEL", "MOBILE", "BACKLOG"])
@@ -1603,9 +1598,8 @@ elif menu == "🗺️ Mapa Impacto":
         st.divider()
 
         if len(df_geo) == 0:
-            st.warning("⚠️ Nenhum registro possui coordenadas (Latitude/Longitude) preenchidas válidas na planilha FMT atual.")
+            st.warning("⚠️ Nenhum registro possui coordenadas (Latitude/Longitude) válidas na planilha FMT atual.")
         else:
-            # Filtros para o mapa
             col_f1, col_f2, col_f3 = st.columns(3)
             with col_f1:
                 st_map_opts = ["Todos"] + sorted(list(df_geo["STATUS"].dropna().unique()))
@@ -1623,7 +1617,6 @@ elif menu == "🗺️ Mapa Impacto":
             if sel_anel_map != "Todos":
                 df_geo = df_geo[df_geo["ANEL_ABERTO"] == sel_anel_map]
 
-            # Atribui cores com base no Status ou Anel Aberto para destacar no PyDeck
             def get_color(row):
                 if str(row.get("ANEL_ABERTO")).upper() == "SIM":
                     return [220, 38, 38, 200]  # Vermelho forte para Anel Aberto
@@ -1636,7 +1629,6 @@ elif menu == "🗺️ Mapa Impacto":
 
             df_geo["color"] = df_geo.apply(get_color, axis=1)
 
-            # Centraliza o mapa na média das coordenadas filtradas (ou padrão São Paulo)
             lat_center = df_geo["LATITUDE"].mean() if not df_geo.empty else -23.5505
             lon_center = df_geo["LONGITUDE"].mean() if not df_geo.empty else -46.6333
 
@@ -1645,7 +1637,7 @@ elif menu == "🗺️ Mapa Impacto":
                 data=df_geo,
                 get_position='[LONGITUDE, LATITUDE]',
                 get_color='color',
-                get_radius=400,  # Raio do ponto em metros
+                get_radius=400,
                 pickable=True,
                 auto_highlight=True,
             )
