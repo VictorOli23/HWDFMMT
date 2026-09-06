@@ -1636,7 +1636,7 @@ elif menu == "📺 Apresentação Executiva":
         render_presentation_card("Casos com Histórico CRC", "🟢", df_crc_view, "#16A34A")
 
 # ==========================================
-# ABA NOVA: CAUSA RAIZ POR IA (GEMINI API)
+# ABA NOVA: CAUSA RAIZ IA (GEMINI API)
 # ==========================================
 elif menu == "🤖 Causa Raiz IA":
     st.title("🤖 Tags Automáticas de Causa Raiz por IA (Gemini API)")
@@ -1664,10 +1664,10 @@ elif menu == "🤖 Causa Raiz IA":
             else:
                 with st.spinner("🤖 Analisando alarmes e gerando tags de causa raiz via Gemini..."):
                     try:
-                        genai.configure(api_key=api_key_input.strip())
+                        # Importação e inicialização utilizando o cliente moderno google-genai compatível com chaves AQ...
+                        from google import genai
                         
-                        # Usando o modelo genérico ou o padrão atualizado para evitar erros 404
-                        model = genai.GenerativeModel('gemini-2.5-flash')
+                        client = genai.Client(api_key=api_key_input.strip())
                         
                         resultados_ia = []
                         amostra = df_ai_pendentes.head(25)
@@ -1689,7 +1689,10 @@ Dados do Chamado:
 - Observações: {obs}"""
 
                             try:
-                                response = model.generate_content(prompt)
+                                response = client.models.generate_content(
+                                    model='gemini-2.5-flash',
+                                    contents=prompt,
+                                )
                                 texto_resp = response.text.strip()
                                 partes = texto_resp.split("|")
                                 causa = partes[0].strip() if len(partes) > 0 else "Análise Indeterminada"
