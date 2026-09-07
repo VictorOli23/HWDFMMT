@@ -281,8 +281,8 @@ if not st.session_state['logged_in']:
             st.markdown("---")
             st.markdown("""
             **Atualizações Recentes:**
-            * 📈 **Planilhas Excel Aprimoradas:** Downloads agora formatados nativamente como Tabelas, autoajustáveis e limpas.
-            * 🗺️ **Link Maps Inteligente:** Opção de abrir a localização de equipamentos no Google Maps direto do mapa e das tabelas!
+            * 📸 **Street View Integrado:** Links diretos para inspecionar torres, prédios e locais dos equipamentos.
+            * 🗺️ **Link Maps Inteligente:** Opções rápidas de rota e visualização urbana.
             """)
 
     with col_login:
@@ -315,7 +315,6 @@ if not st.session_state['logged_in']:
 # 4. FUNÇÕES DE BANCO DE DADOS, LIMPEZA E EXCEL
 # ==========================================
 def format_as_excel_table(writer, df, sheet_name, table_name):
-    """Aplica o formato nativo de Tabela Excel (TableStyleMedium9) e ajusta as colunas"""
     ws = writer.sheets[sheet_name]
     if df.empty:
         return
@@ -352,7 +351,6 @@ def format_as_excel_table(writer, df, sheet_name, table_name):
         ws.column_dimensions[column].width = adjusted_width
 
 def safe_crosstab_formatted(df, col1, col2, writer, sheet_name, table_name):
-    """Gera um crosstab (Dinâmica) e aplica formatação nativa Excel"""
     c1 = df[col1] if col1 in df.columns else pd.Series(["NÃO INFORMADO"] * len(df), name=col1)
     c2 = df[col2] if col2 in df.columns else pd.Series(["NÃO INFORMADO"] * len(df), name=col2)
     ct = pd.crosstab(c1.fillna("NÃO INFORMADO"), c2.fillna("NÃO INFORMADO"), margins=True, margins_name="Total Geral")
@@ -1659,7 +1657,7 @@ elif menu == "📺 Apresentação Executiva":
 # ==========================================
 elif menu == "🗺️ Mapa Impacto":
     st.title("🗺️ Mapa de Impacto (Rede Fixa)")
-    st.caption("Visualização geoespacial com pontos limpos. Clique no link na tabela abaixo para abrir a rota no Google Maps.")
+    st.caption("Visualização geoespacial limpa. Utilize os links na tabela abaixo para abrir a rota ou o Street View e inspecionar a torre/prédio.")
 
     df_map = load_table("backlog_fixa")
 
@@ -1704,18 +1702,19 @@ elif menu == "🗺️ Mapa Impacto":
 
             def get_color(row):
                 if str(row.get("ANEL_ABERTO")).upper() == "SIM":
-                    return [220, 38, 38, 220] # Vermelho (Anel)
+                    return [220, 38, 38, 220]
                 st_val = str(row.get("STATUS")).upper()
                 if "ENCERRADO" in st_val:
-                    return [22, 163, 74, 200] # Verde
+                    return [22, 163, 74, 200]
                 elif "INICIADO" in st_val or "ACIONADO" in st_val:
-                    return [249, 115, 22, 220] # Laranja
-                return [37, 99, 235, 200] # Azul padrão
+                    return [249, 115, 22, 220]
+                return [37, 99, 235, 200]
 
             df_geo["color"] = df_geo.apply(get_color, axis=1)
             
-            # Criando o link para o Maps e colocando no Dataframe para permitir o clique
+            # Criando links para Google Maps (Rota) e Google Maps Street View
             df_geo["LINK_MAPS"] = "https://www.google.com/maps/search/?api=1&query=" + df_geo["LATITUDE"].astype(str) + "," + df_geo["LONGITUDE"].astype(str)
+            df_geo["LINK_STREETVIEW"] = "https://www.google.com/maps/@?api=1&map_action=pano&viewpoint=" + df_geo["LATITUDE"].astype(str) + "," + df_geo["LONGITUDE"].astype(str)
 
             lat_c = df_geo["LATITUDE"].mean() if not df_geo.empty else -23.5505
             lon_c = df_geo["LONGITUDE"].mean() if not df_geo.empty else -46.6333
@@ -1735,24 +1734,25 @@ elif menu == "🗺️ Mapa Impacto":
                 layers=[scatter_layer],
                 initial_view_state=view_state,
                 tooltip={
-                    "html": "<b>TSK:</b> {TSK} <br/><b>NE ID:</b> {NE_ID} <br/><b>Quadrante:</b> {QUADRANTE} <br/><b>Status:</b> {STATUS} <br/><br/>📍 <i>Use a tabela abaixo para abrir a rota no Maps!</i>",
+                    "html": "<b>TSK:</b> {TSK} <br/><b>NE ID:</b> {NE_ID} <br/><b>Quadrante:</b> {QUADRANTE} <br/><b>Status:</b> {STATUS} <br/><br/>📍 <i>Use a tabela abaixo para ver a rota ou o Street View!</i>",
                     "style": {"backgroundColor": "#1E293B", "color": "white", "fontSize": "13px"}
                 }
             )
 
             st.pydeck_chart(r)
             st.caption("🔴 Vermelho: Anéis Abertos | 🟠 Laranja: Acionados/Iniciados | 🟢 Verde: Encerrados | 🔵 Azul: Pendentes/Outros")
-            st.info("💡 **Dica:** Utilize a coluna 'Abrir Google Maps' na tabela logo abaixo para traçar a rota pro técnico no local.")
+            st.info("💡 **Dica:** Utilize as colunas **'🗺️ Abrir Google Maps'** e **'📸 Ver Street View'** na tabela abaixo para inspecionar o local, torre ou prédio do equipamento.")
 
             st.write("")
-            st.markdown("### 📋 Tabela de Localização Direta")
-            cols_map_show = [c for c in ["TSK", "NE_ID", "QUADRANTE", "STATUS", "ANEL_ABERTO", "LINK_MAPS"] if c in df_geo.columns]
+            st.markdown("### 📋 Tabela de Localização Direta & Street View")
+            cols_map_show = [c for c in ["TSK", "NE_ID", "QUADRANTE", "STATUS", "ANEL_ABERTO", "LINK_MAPS", "LINK_STREETVIEW"] if c in df_geo.columns]
             st.dataframe(
                 df_geo[cols_map_show],
                 use_container_width=True,
                 hide_index=True,
                 column_config={
-                    "LINK_MAPS": st.column_config.LinkColumn("🗺️ Abrir Google Maps", display_text="📍 Ver Rota")
+                    "LINK_MAPS": st.column_config.LinkColumn("🗺️ Abrir Google Maps", display_text="📍 Ver Rota"),
+                    "LINK_STREETVIEW": st.column_config.LinkColumn("📸 Ver Street View", display_text="👀 Abrir Street View")
                 }
             )
 
@@ -1761,7 +1761,7 @@ elif menu == "🗺️ Mapa Impacto":
 # ==========================================
 elif menu == "🗺️ Mapa Geral":
     st.title("🗺️ Mapa Geral de Chamados (Rede Móvel / FMMT)")
-    st.caption("Visão ampla sem divisões coloridas poluídas. Clique nos equipamentos ou nos links da tabela para navegar ao local.")
+    st.caption("Visão ampla. Use a tabela abaixo para conferir a rota ou abrir o Street View do local.")
 
     df_map_fmmt = load_table("backlog_fmmt")
 
@@ -1811,6 +1811,7 @@ elif menu == "🗺️ Mapa Geral":
             df_geo_fmmt["color"] = df_geo_fmmt.apply(get_color_fmmt, axis=1)
             
             df_geo_fmmt["LINK_MAPS"] = "https://www.google.com/maps/search/?api=1&query=" + df_geo_fmmt["LATITUDE"].astype(str) + "," + df_geo_fmmt["LONGITUDE"].astype(str)
+            df_geo_fmmt["LINK_STREETVIEW"] = "https://www.google.com/maps/@?api=1&map_action=pano&viewpoint=" + df_geo_fmmt["LATITUDE"].astype(str) + "," + df_geo_fmmt["LONGITUDE"].astype(str)
 
             lat_c = df_geo_fmmt["LATITUDE"].mean() if not df_geo_fmmt.empty else -23.5505
             lon_c = df_geo_fmmt["LONGITUDE"].mean() if not df_geo_fmmt.empty else -46.6333
@@ -1830,24 +1831,25 @@ elif menu == "🗺️ Mapa Geral":
                 layers=[scatter_layer_f],
                 initial_view_state=view_state_f,
                 tooltip={
-                    "html": "<b>TSK:</b> {TSK} <br/><b>NE ID:</b> {NE_ID} <br/><b>Quadrante:</b> {QUADRANTE} <br/><b>Status:</b> {STATUS} <br/><br/>📍 <i>Use a tabela abaixo para abrir a rota no Maps!</i>",
+                    "html": "<b>TSK:</b> {TSK} <br/><b>NE ID:</b> {NE_ID} <br/><b>Quadrante:</b> {QUADRANTE} <br/><b>Status:</b> {STATUS} <br/><br/>📍 <i>Use a tabela abaixo para ver a rota ou o Street View!</i>",
                     "style": {"backgroundColor": "#1E293B", "color": "white", "fontSize": "13px"}
                 }
             )
 
             st.pydeck_chart(r_f)
             st.caption("🟠 Laranja: Acionados/Iniciados | 🟢 Verde: Encerrados | 🔵 Azul: Pendentes/Outros")
-            st.info("💡 **Dica:** Utilize a coluna 'Abrir Google Maps' na tabela logo abaixo para traçar a rota pro técnico no local.")
+            st.info("💡 **Dica:** Utilize as colunas **'🗺️ Abrir Google Maps'** e **'📸 Ver Street View'** na tabela abaixo para inspecionar as torres e prédios dos sites móveis.")
 
             st.write("")
-            st.markdown("### 📋 Tabela de Localização Direta (FMMT)")
-            cols_map_show_f = [c for c in ["TSK", "NE_ID", "QUADRANTE", "STATUS", "FALHA", "LINK_MAPS"] if c in df_geo_fmmt.columns]
+            st.markdown("### 📋 Tabela de Localização Direta & Street View (FMMT)")
+            cols_map_show_f = [c for c in ["TSK", "NE_ID", "QUADRANTE", "STATUS", "FALHA", "LINK_MAPS", "LINK_STREETVIEW"] if c in df_geo_fmmt.columns]
             st.dataframe(
                 df_geo_fmmt[cols_map_show_f], 
                 use_container_width=True, 
                 hide_index=True,
                 column_config={
-                    "LINK_MAPS": st.column_config.LinkColumn("🗺️ Abrir Google Maps", display_text="📍 Ver Rota")
+                    "LINK_MAPS": st.column_config.LinkColumn("🗺️ Abrir Google Maps", display_text="📍 Ver Rota"),
+                    "LINK_STREETVIEW": st.column_config.LinkColumn("📸 Ver Street View", display_text="👀 Abrir Street View")
                 }
             )
 
