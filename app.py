@@ -281,8 +281,8 @@ if not st.session_state['logged_in']:
             st.markdown("---")
             st.markdown("""
             **Atualizações Recentes:**
-            * 📈 **Evolução por Dia da Semana (Seg x Ter x Qua)** nos cards de Anéis e DWDM.
-            * 🗺️ Mapas Interativos com Regiões Coloridas por Quadrantes (Q1 a Q4).
+            * 📈 **Planilhas Excel Aprimoradas:** Downloads agora formatados nativamente como Tabelas, autoajustáveis e limpas.
+            * 🗺️ **Link Maps Inteligente:** Opção de abrir a localização de equipamentos no Google Maps direto do mapa e das tabelas!
             """)
 
     with col_login:
@@ -312,8 +312,53 @@ if not st.session_state['logged_in']:
     st.stop()
 
 # ==========================================
-# 4. FUNÇÕES DE BANCO DE DADOS E LIMPEZA
+# 4. FUNÇÕES DE BANCO DE DADOS, LIMPEZA E EXCEL
 # ==========================================
+def format_as_excel_table(writer, df, sheet_name, table_name):
+    """Aplica o formato nativo de Tabela Excel (TableStyleMedium9) e ajusta as colunas"""
+    ws = writer.sheets[sheet_name]
+    if df.empty:
+        return
+    max_row = len(df) + 1
+    max_col = len(df.columns)
+    
+    def get_col_letter(n):
+        string = ""
+        while n > 0:
+            n, remainder = divmod(n - 1, 26)
+            string = chr(65 + remainder) + string
+        return string
+        
+    col_end_letter = get_col_letter(max_col)
+    ref = f"A1:{col_end_letter}{max_row}"
+    
+    clean_tname = re.sub(r'[^a-zA-Z0-9_]', '', table_name)
+    
+    tab = Table(displayName=clean_tname, ref=ref)
+    style = TableStyleInfo(name="TableStyleMedium9", showFirstColumn=False, showLastColumn=False, showRowStripes=True, showColumnStripes=True)
+    tab.tableStyleInfo = style
+    ws.add_table(tab)
+    
+    for col in ws.columns:
+        max_length = 0
+        column = col[0].column_letter
+        for cell in col:
+            try: 
+                if cell.value and len(str(cell.value)) > max_length:
+                    max_length = len(str(cell.value))
+            except:
+                pass
+        adjusted_width = min(max_length + 2, 55)
+        ws.column_dimensions[column].width = adjusted_width
+
+def safe_crosstab_formatted(df, col1, col2, writer, sheet_name, table_name):
+    """Gera um crosstab (Dinâmica) e aplica formatação nativa Excel"""
+    c1 = df[col1] if col1 in df.columns else pd.Series(["NÃO INFORMADO"] * len(df), name=col1)
+    c2 = df[col2] if col2 in df.columns else pd.Series(["NÃO INFORMADO"] * len(df), name=col2)
+    ct = pd.crosstab(c1.fillna("NÃO INFORMADO"), c2.fillna("NÃO INFORMADO"), margins=True, margins_name="Total Geral")
+    ct.to_excel(writer, sheet_name=sheet_name, index=True)
+    format_as_excel_table(writer, ct.reset_index(), sheet_name, table_name)
+
 def upsert_quadrantes(df_quad):
     col_end = next((c for c in df_quad.columns if "END" in str(c).upper()), df_quad.columns[0])
     col_q_val = next((c for c in df_quad.columns if any(k in str(c).upper() for k in ["QD", "QUADRANTE", "ANF"])), df_quad.columns[-1])
@@ -977,19 +1022,24 @@ elif menu == "📂 Backlog Operacional (Fixa)":
             output = io.BytesIO()
             with pd.ExcelWriter(output, engine="openpyxl") as writer:
                 df_bk_view[cols_backlog].to_excel(writer, index=False, sheet_name="Backlog_Fixa_FMMT")
+                format_as_excel_table(writer, df_bk_view[cols_backlog], "Backlog_Fixa_FMMT", "TblBacklog")
+
                 if not df_bk_view.empty:
                     df_st = df_bk_view.groupby("STATUS").size().reset_index(name="Quantidade")
                     df_st.to_excel(writer, index=False, sheet_name="Dinâmica_Status")
+                    format_as_excel_table(writer, df_st, "Dinâmica_Status", "TblDynStatus")
+
                     if "QUADRANTE" in df_bk_view.columns:
-                        df_qd = pd.crosstab(df_bk_view["QUADRANTE"].fillna("NÃO INFORMADO"), df_bk_view["STATUS"].fillna("NÃO INFORMADO"), margins=True, margins_name="Total Geral")
-                        df_qd.to_excel(writer, sheet_name="Dinâmica_Quadrante")
+                        safe_crosstab_formatted(df_bk_view, "QUADRANTE", "STATUS", writer, "Dinâmica_Quadrante", "TblDynQuad")
+                        
                     if "TECNICO" in df_bk_view.columns:
                         tec_view = df_bk_view[df_bk_view["TECNICO"].astype(str).str.strip() != ""]
                         if not tec_view.empty:
                             df_tec = tec_view.groupby("TECNICO").size().reset_index(name="Quantidade").sort_values("Quantidade", ascending=False)
                             df_tec.to_excel(writer, index=False, sheet_name="Dinâmica_Técnicos")
+                            format_as_excel_table(writer, df_tec, "Dinâmica_Técnicos", "TblDynTecnicos")
 
-            st.download_button("📥 Baixar Backlog Unificado em Excel (.xlsx)", data=output.getvalue(), file_name=f"Backlog_Unificado_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+            st.download_button("📥 Baixar Backlog Unificado (Excel Formato Tabela)", data=output.getvalue(), file_name=f"Backlog_Unificado_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
 # ==========================================
 # ABA 5: BACKLOG MÓVEL
@@ -1094,19 +1144,24 @@ elif menu == "📱 Backlog Móvel":
             output_movel = io.BytesIO()
             with pd.ExcelWriter(output_movel, engine="openpyxl") as writer:
                 df_movel_view[cols_movel].to_excel(writer, index=False, sheet_name="Backlog_Movel")
+                format_as_excel_table(writer, df_movel_view[cols_movel], "Backlog_Movel", "TblMovel")
+
                 if not df_movel_view.empty:
                     df_st_m = df_movel_view.groupby("STATUS").size().reset_index(name="Quantidade")
                     df_st_m.to_excel(writer, index=False, sheet_name="Dinâmica_Status")
+                    format_as_excel_table(writer, df_st_m, "Dinâmica_Status", "TblMovelDynStatus")
+
                     if "QUADRANTE" in df_movel_view.columns:
-                        df_qd_m = pd.crosstab(df_movel_view["QUADRANTE"].fillna("NÃO INFORMADO"), df_movel_view["STATUS"].fillna("NÃO INFORMADO"), margins=True, margins_name="Total Geral")
-                        df_qd_m.to_excel(writer, sheet_name="Dinâmica_Quadrante")
+                        safe_crosstab_formatted(df_movel_view, "QUADRANTE", "STATUS", writer, "Dinâmica_Quadrante", "TblMovelDynQuad")
+                        
                     if "TECNICO" in df_movel_view.columns:
                         tec_view_m = df_movel_view[df_movel_view["TECNICO"].astype(str).str.strip() != ""]
                         if not tec_view_m.empty:
                             df_tec_m = tec_view_m.groupby("TECNICO").size().reset_index(name="Quantidade").sort_values("Quantidade", ascending=False)
                             df_tec_m.to_excel(writer, index=False, sheet_name="Dinâmica_Técnicos")
+                            format_as_excel_table(writer, df_tec_m, "Dinâmica_Técnicos", "TblMovelDynTecnicos")
 
-            st.download_button("📥 Baixar Backlog Móvel em Excel (.xlsx)", data=output_movel.getvalue(), file_name=f"Backlog_Movel_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+            st.download_button("📥 Baixar Backlog Móvel (Excel Formato Tabela)", data=output_movel.getvalue(), file_name=f"Backlog_Movel_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
 # ==========================================
 # ABA 6: HANDOVER (SAINTES E ENTRANTES)
@@ -1304,22 +1359,27 @@ elif menu == "💼 Gestão B2B":
             output_b2b = io.BytesIO()
             with pd.ExcelWriter(output_b2b, engine="openpyxl") as writer:
                 df_b2b_view[cols_b2b].to_excel(writer, index=False, sheet_name="B2B_Operacao")
+                format_as_excel_table(writer, df_b2b_view[cols_b2b], "B2B_Operacao", "TblB2B")
+                
                 if not df_b2b_view.empty:
                     df_st_b2b = df_b2b_view.groupby("STATUS").size().reset_index(name="Quantidade")
                     df_st_b2b.to_excel(writer, index=False, sheet_name="Dinâmica_Status")
+                    format_as_excel_table(writer, df_st_b2b, "Dinâmica_Status", "TblB2BDynStatus")
+                    
                     if "GRUPO_ACIONADO" in df_b2b_view.columns:
-                        df_grp_b2b = pd.crosstab(df_b2b_view["GRUPO_ACIONADO"].fillna("NÃO INFORMADO"), df_b2b_view["STATUS"].fillna("NÃO INFORMADO"), margins=True, margins_name="Total Geral")
-                        df_grp_b2b.to_excel(writer, sheet_name="Dinâmica_Grupos")
+                        safe_crosstab_formatted(df_b2b_view, "GRUPO_ACIONADO", "STATUS", writer, "Dinâmica_Grupos", "TblB2BDynGrps")
+                        
                     if "QUADRANTE" in df_b2b_view.columns:
-                        df_qd_b2b = pd.crosstab(df_b2b_view["QUADRANTE"].fillna("NÃO INFORMADO"), df_b2b_view["STATUS"].fillna("NÃO INFORMADO"), margins=True, margins_name="Total Geral")
-                        df_qd_b2b.to_excel(writer, sheet_name="Dinâmica_Quadrante")
+                        safe_crosstab_formatted(df_b2b_view, "QUADRANTE", "STATUS", writer, "Dinâmica_Quadrante", "TblB2BDynQuad")
+                        
                     if "TECNICO" in df_b2b_view.columns:
                         tec_view_b2b = df_b2b_view[df_b2b_view["TECNICO"].astype(str).str.strip() != ""]
                         if not tec_view_b2b.empty:
                             df_tec_b2b = tec_view_b2b.groupby("TECNICO").size().reset_index(name="Quantidade").sort_values("Quantidade", ascending=False)
                             df_tec_b2b.to_excel(writer, index=False, sheet_name="Dinâmica_Técnicos")
+                            format_as_excel_table(writer, df_tec_b2b, "Dinâmica_Técnicos", "TblB2BDynTecnicos")
 
-            st.download_button("📥 Baixar Base B2B em Excel (.xlsx)", data=output_b2b.getvalue(), file_name=f"B2B_Operacao_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+            st.download_button("📥 Baixar Base B2B (Excel Formato Tabela)", data=output_b2b.getvalue(), file_name=f"B2B_Operacao_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
 # ==========================================
 # ABA 8: APRESENTAÇÃO EXECUTIVA E EXPORT CLIENTE
@@ -1330,37 +1390,6 @@ elif menu == "📺 Apresentação Executiva":
     st.markdown("### 📥 Relatório Consolidado Completo (Visão Cliente)")
     st.caption("Baixe TODAS as bases atualizadas (Anéis, B2B, CRC, DWDM e Críticos) formatadas como Tabelas Nativas do Excel em um único arquivo.")
     
-    def format_as_excel_table(writer, df, sheet_name, table_name):
-        ws = writer.sheets[sheet_name]
-        if df.empty:
-            return
-        max_row = len(df) + 1
-        max_col = len(df.columns)
-        
-        def get_col_letter(n):
-            string = ""
-            while n > 0:
-                n, remainder = divmod(n - 1, 26)
-                string = chr(65 + remainder) + string
-            return string
-            
-        col_end_letter = get_col_letter(max_col)
-        ref = f"A1:{col_end_letter}{max_row}"
-        
-        clean_tname = re.sub(r'[^a-zA-Z0-9_]', '', table_name)
-        
-        tab = Table(displayName=clean_tname, ref=ref)
-        style = TableStyleInfo(name="TableStyleMedium9", showFirstColumn=False, showLastColumn=False, showRowStripes=True, showColumnStripes=True)
-        tab.tableStyleInfo = style
-        ws.add_table(tab)
-
-    def safe_crosstab_formatted(df, col1, col2, writer, sheet_name, table_name):
-        c1 = df[col1] if col1 in df.columns else pd.Series(["NÃO INFORMADO"] * len(df), name=col1)
-        c2 = df[col2] if col2 in df.columns else pd.Series(["NÃO INFORMADO"] * len(df), name=col2)
-        ct = pd.crosstab(c1.fillna("NÃO INFORMADO"), c2.fillna("NÃO INFORMADO"), margins=True, margins_name="Total Geral")
-        ct.to_excel(writer, sheet_name=sheet_name, index=True)
-        format_as_excel_table(writer, ct.reset_index(), sheet_name, table_name)
-
     output_geral = io.BytesIO()
     with pd.ExcelWriter(output_geral, engine="openpyxl") as writer:
         df_f_exp = load_table("backlog_fixa")
@@ -1391,9 +1420,9 @@ elif menu == "📺 Apresentação Executiva":
         if not df_b_exp.empty:
             has_data = True
             df_b_exp.to_excel(writer, index=False, sheet_name="Dados_B2B")
-            format_as_excel_table(writer, df_b_exp, "Dados_B2B", "TblB2B")
+            format_as_excel_table(writer, df_b_exp, "Dados_B2B", "TblB2BData")
             if "GRUPO_ACIONADO" in df_b_exp.columns and "STATUS" in df_b_exp.columns:
-                safe_crosstab_formatted(df_b_exp, "GRUPO_ACIONADO", "STATUS", writer, "Resumo_B2B", "TblResumoB2B")
+                safe_crosstab_formatted(df_b_exp, "GRUPO_ACIONADO", "STATUS", writer, "Resumo_B2B", "TblResumoB2BData")
                 
         if not df_c_exp.empty:
             has_data = True
@@ -1630,7 +1659,7 @@ elif menu == "📺 Apresentação Executiva":
 # ==========================================
 elif menu == "🗺️ Mapa Impacto":
     st.title("🗺️ Mapa de Impacto (Rede Fixa)")
-    st.caption("Regiões metropolitanas e capital pintadas por quadrantes: Q1 (Vermelho - Leste/Nordeste), Q2 (Roxo - Norte/Oeste), Q3 (Amarelo - Sudoeste) e Q4 (Azul - Sudeste/ABC).")
+    st.caption("Visualização geoespacial com pontos limpos. Clique no link na tabela abaixo para abrir a rota no Google Maps.")
 
     df_map = load_table("backlog_fixa")
 
@@ -1675,52 +1704,21 @@ elif menu == "🗺️ Mapa Impacto":
 
             def get_color(row):
                 if str(row.get("ANEL_ABERTO")).upper() == "SIM":
-                    return [220, 38, 38, 220]
+                    return [220, 38, 38, 220] # Vermelho (Anel)
                 st_val = str(row.get("STATUS")).upper()
                 if "ENCERRADO" in st_val:
-                    return [22, 163, 74, 200]
+                    return [22, 163, 74, 200] # Verde
                 elif "INICIADO" in st_val or "ACIONADO" in st_val:
-                    return [249, 115, 22, 220]
-                return [37, 99, 235, 200]
+                    return [249, 115, 22, 220] # Laranja
+                return [37, 99, 235, 200] # Azul padrão
 
             df_geo["color"] = df_geo.apply(get_color, axis=1)
+            
+            # Criando o link para o Maps e colocando no Dataframe para permitir o clique
+            df_geo["LINK_MAPS"] = "https://www.google.com/maps/search/?api=1&query=" + df_geo["LATITUDE"].astype(str) + "," + df_geo["LONGITUDE"].astype(str)
 
-            lat_c, lon_c = -23.5505, -46.6333
-
-            # Definição dos Polígonos Preenchidos para Q1, Q2, Q3 e Q4 cobrindo a região metropolitana de SP
-            polygons_data = [
-                {
-                    "name": "Q1 (Leste / Nordeste - Guarulhos, Mogi, ZL)",
-                    "polygon": [[lon_c, lat_c], [-44.5, lat_c + 1.2], [-44.5, lat_c - 0.5], [lon_c, lat_c - 0.2]],
-                    "color": [239, 68, 68, 45] # Vermelho translúcido
-                },
-                {
-                    "name": "Q2 (Norte / Noroeste / Oeste - Osasco, Barueri, Santana, Lapa)",
-                    "polygon": [[lon_c, lat_c], [-48.2, lat_c + 1.2], [-48.2, lat_c], [lon_c, lat_c]],
-                    "color": [147, 51, 234, 45] # Roxo translúcido
-                },
-                {
-                    "name": "Q3 (Sudoeste / Sul-Oeste - Cotia, Taboão, Sto Amaro)",
-                    "polygon": [[lon_c, lat_c], [-48.2, lat_c], [-48.2, lat_c - 1.5], [lon_c, lat_c - 0.5]],
-                    "color": [234, 179, 8, 45] # Amarelo translúcido
-                },
-                {
-                    "name": "Q4 (Sudeste / ABC Paulista - Sbc, Santo André, Mauá, V. Mariana)",
-                    "polygon": [[lon_c, lat_c], [lon_c, lat_c - 0.2], [-45.5, lat_c - 1.5], [-45.5, lat_c]],
-                    "color": [59, 130, 246, 45] # Azul translúcido
-                }
-            ]
-
-            polygon_layer = pdk.Layer(
-                "PolygonLayer",
-                data=polygons_data,
-                get_polygon="polygon",
-                get_fill_color="color",
-                pickable=False,
-                stroked=True,
-                get_line_color=[255, 255, 255, 100],
-                get_line_width=2
-            )
+            lat_c = df_geo["LATITUDE"].mean() if not df_geo.empty else -23.5505
+            lon_c = df_geo["LONGITUDE"].mean() if not df_geo.empty else -46.6333
 
             scatter_layer = pdk.Layer(
                 "ScatterplotLayer",
@@ -1734,28 +1732,36 @@ elif menu == "🗺️ Mapa Impacto":
 
             view_state = pdk.ViewState(latitude=lat_c, longitude=lon_c, zoom=10, pitch=0)
             r = pdk.Deck(
-                layers=[polygon_layer, scatter_layer],
+                layers=[scatter_layer],
                 initial_view_state=view_state,
                 tooltip={
-                    "html": "<b>TSK:</b> {TSK} <br/><b>NE ID:</b> {NE_ID} <br/><b>Quadrante:</b> {QUADRANTE} <br/><b>Status:</b> {STATUS} <br/><b>Anel Aberto:</b> {ANEL_ABERTO}",
-                    "style": {"backgroundColor": "steelblue", "color": "white"}
+                    "html": "<b>TSK:</b> {TSK} <br/><b>NE ID:</b> {NE_ID} <br/><b>Quadrante:</b> {QUADRANTE} <br/><b>Status:</b> {STATUS} <br/><br/><b>📌 Maps:</b> <a href='{LINK_MAPS}' target='_blank' style='color:#93C5FD; text-decoration: underline;'>Abrir Localização</a>",
+                    "style": {"backgroundColor": "#1E293B", "color": "white", "fontSize": "13px"}
                 }
             )
 
             st.pydeck_chart(r)
-            st.caption("🔴 Q1: Vermelho (Leste/Guarulhos) | 🟣 Q2: Roxo (Oeste/Osasco/Barueri) | 🟡 Q3: Amarelo (Sudoeste/Cotia/Sto Amaro) | 🔵 Q4: Azul (ABC/Sudeste)")
+            st.caption("🔴 Vermelho: Anéis Abertos | 🟠 Laranja: Acionados/Iniciados | 🟢 Verde: Encerrados | 🔵 Azul: Pendentes/Outros")
+            st.info("💡 **Dica:** Você pode clicar no atalho do Maps pelo popup da bolinha no mapa ou diretamente na tabela abaixo!")
 
             st.write("")
-            st.markdown("### 📋 Tabela Filtrada do Mapa (Fixa)")
-            cols_map_show = [c for c in ["TSK", "NE_ID", "QUADRANTE", "LATITUDE", "LONGITUDE", "STATUS", "ANEL_ABERTO"] if c in df_geo.columns]
-            st.dataframe(df_geo[cols_map_show], use_container_width=True, hide_index=True)
+            st.markdown("### 📋 Tabela de Localização Direta")
+            cols_map_show = [c for c in ["TSK", "NE_ID", "QUADRANTE", "STATUS", "ANEL_ABERTO", "LINK_MAPS"] if c in df_geo.columns]
+            st.dataframe(
+                df_geo[cols_map_show],
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    "LINK_MAPS": st.column_config.LinkColumn("🗺️ Abrir Google Maps", display_text="📍 Ver Rota")
+                }
+            )
 
 # ==========================================
 # ABA: MAPA GERAL (GEORREFERENCIADO - FMMT)
 # ==========================================
 elif menu == "🗺️ Mapa Geral":
     st.title("🗺️ Mapa Geral de Chamados (Rede Móvel / FMMT)")
-    st.caption("Visualização geoespacial completa com as regiões metropolitanas pintadas e preenchidas para Q1, Q2, Q3 e Q4.")
+    st.caption("Visão ampla sem divisões poluídas. Clique nos equipamentos ou nos links da tabela para navegar ao local.")
 
     df_map_fmmt = load_table("backlog_fmmt")
 
@@ -1803,26 +1809,11 @@ elif menu == "🗺️ Mapa Geral":
                 return [37, 99, 235, 200]
 
             df_geo_fmmt["color"] = df_geo_fmmt.apply(get_color_fmmt, axis=1)
+            
+            df_geo_fmmt["LINK_MAPS"] = "https://www.google.com/maps/search/?api=1&query=" + df_geo_fmmt["LATITUDE"].astype(str) + "," + df_geo_fmmt["LONGITUDE"].astype(str)
 
-            lat_c, lon_c = -23.5505, -46.6333
-
-            polygons_data_f = [
-                {"name": "Q1", "polygon": [[lon_c, lat_c], [-44.5, lat_c + 1.2], [-44.5, lat_c - 0.5], [lon_c, lat_c - 0.2]], "color": [239, 68, 68, 45]},
-                {"name": "Q2", "polygon": [[lon_c, lat_c], [-48.2, lat_c + 1.2], [-48.2, lat_c], [lon_c, lat_c]], "color": [147, 51, 234, 45]},
-                {"name": "Q3", "polygon": [[lon_c, lat_c], [-48.2, lat_c], [-48.2, lat_c - 1.5], [lon_c, lat_c - 0.5]], "color": [234, 179, 8, 45]},
-                {"name": "Q4", "polygon": [[lon_c, lat_c], [lon_c, lat_c - 0.2], [-45.5, lat_c - 1.5], [-45.5, lat_c]], "color": [59, 130, 246, 45]}
-            ]
-
-            polygon_layer_f = pdk.Layer(
-                "PolygonLayer",
-                data=polygons_data_f,
-                get_polygon="polygon",
-                get_fill_color="color",
-                pickable=False,
-                stroked=True,
-                get_line_color=[255, 255, 255, 100],
-                get_line_width=2
-            )
+            lat_c = df_geo_fmmt["LATITUDE"].mean() if not df_geo_fmmt.empty else -23.5505
+            lon_c = df_geo_fmmt["LONGITUDE"].mean() if not df_geo_fmmt.empty else -46.6333
 
             scatter_layer_f = pdk.Layer(
                 "ScatterplotLayer",
@@ -1836,21 +1827,29 @@ elif menu == "🗺️ Mapa Geral":
 
             view_state_f = pdk.ViewState(latitude=lat_c, longitude=lon_c, zoom=10, pitch=0)
             r_f = pdk.Deck(
-                layers=[polygon_layer_f, scatter_layer_f],
+                layers=[scatter_layer_f],
                 initial_view_state=view_state_f,
                 tooltip={
-                    "html": "<b>TSK:</b> {TSK} <br/><b>NE ID:</b> {NE_ID} <br/><b>Quadrante:</b> {QUADRANTE} <br/><b>Status:</b> {STATUS} <br/><b>Falha:</b> {FALHA}",
-                    "style": {"backgroundColor": "darkslateblue", "color": "white"}
+                    "html": "<b>TSK:</b> {TSK} <br/><b>NE ID:</b> {NE_ID} <br/><b>Quadrante:</b> {QUADRANTE} <br/><b>Status:</b> {STATUS} <br/><br/><b>📌 Maps:</b> <a href='{LINK_MAPS}' target='_blank' style='color:#93C5FD; text-decoration: underline;'>Abrir Localização</a>",
+                    "style": {"backgroundColor": "#1E293B", "color": "white", "fontSize": "13px"}
                 }
             )
 
             st.pydeck_chart(r_f)
-            st.caption("🔴 Q1: Vermelho | 🟣 Q2: Roxo | 🟡 Q3: Amarelo | 🔵 Q4: Azul (Regiões preenchidas)")
+            st.caption("🟠 Laranja: Acionados/Iniciados | 🟢 Verde: Encerrados | 🔵 Azul: Pendentes/Outros")
+            st.info("💡 **Dica:** Utilize os links da coluna 'Abrir Google Maps' na tabela para traçar a rota pro técnico no local.")
 
             st.write("")
-            st.markdown("### 📋 Tabela Filtrada do Mapa Geral (FMMT)")
-            cols_map_show_f = [c for c in ["TSK", "NE_ID", "QUADRANTE", "LATITUDE", "LONGITUDE", "STATUS", "FALHA"] if c in df_geo_fmmt.columns]
-            st.dataframe(df_geo_fmmt[cols_map_show_f], use_container_width=True, hide_index=True)
+            st.markdown("### 📋 Tabela de Localização Direta (FMMT)")
+            cols_map_show_f = [c for c in ["TSK", "NE_ID", "QUADRANTE", "STATUS", "FALHA", "LINK_MAPS"] if c in df_geo_fmmt.columns]
+            st.dataframe(
+                df_geo_fmmt[cols_map_show_f], 
+                use_container_width=True, 
+                hide_index=True,
+                column_config={
+                    "LINK_MAPS": st.column_config.LinkColumn("🗺️ Abrir Google Maps", display_text="📍 Ver Rota")
+                }
+            )
 
 # ==========================================
 # ABA: CASOS CRÍTICOS (MANUAL)
