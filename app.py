@@ -1735,14 +1735,14 @@ elif menu == "🗺️ Mapa Impacto":
                 layers=[scatter_layer],
                 initial_view_state=view_state,
                 tooltip={
-                    "html": "<b>TSK:</b> {TSK} <br/><b>NE ID:</b> {NE_ID} <br/><b>Quadrante:</b> {QUADRANTE} <br/><b>Status:</b> {STATUS} <br/><br/><b>📌 Maps:</b> <a href='{LINK_MAPS}' target='_blank' style='color:#93C5FD; text-decoration: underline;'>Abrir Localização</a>",
+                    "html": "<b>TSK:</b> {TSK} <br/><b>NE ID:</b> {NE_ID} <br/><b>Quadrante:</b> {QUADRANTE} <br/><b>Status:</b> {STATUS} <br/><br/>📍 <i>Use a tabela abaixo para abrir a rota no Maps!</i>",
                     "style": {"backgroundColor": "#1E293B", "color": "white", "fontSize": "13px"}
                 }
             )
 
             st.pydeck_chart(r)
             st.caption("🔴 Vermelho: Anéis Abertos | 🟠 Laranja: Acionados/Iniciados | 🟢 Verde: Encerrados | 🔵 Azul: Pendentes/Outros")
-            st.info("💡 **Dica:** Você pode clicar no atalho do Maps pelo popup da bolinha no mapa ou diretamente na tabela abaixo!")
+            st.info("💡 **Dica:** Utilize a coluna 'Abrir Google Maps' na tabela logo abaixo para traçar a rota pro técnico no local.")
 
             st.write("")
             st.markdown("### 📋 Tabela de Localização Direta")
@@ -1761,7 +1761,7 @@ elif menu == "🗺️ Mapa Impacto":
 # ==========================================
 elif menu == "🗺️ Mapa Geral":
     st.title("🗺️ Mapa Geral de Chamados (Rede Móvel / FMMT)")
-    st.caption("Visão ampla sem divisões poluídas. Clique nos equipamentos ou nos links da tabela para navegar ao local.")
+    st.caption("Visão ampla sem divisões coloridas poluídas. Clique nos equipamentos ou nos links da tabela para navegar ao local.")
 
     df_map_fmmt = load_table("backlog_fmmt")
 
@@ -1830,14 +1830,14 @@ elif menu == "🗺️ Mapa Geral":
                 layers=[scatter_layer_f],
                 initial_view_state=view_state_f,
                 tooltip={
-                    "html": "<b>TSK:</b> {TSK} <br/><b>NE ID:</b> {NE_ID} <br/><b>Quadrante:</b> {QUADRANTE} <br/><b>Status:</b> {STATUS} <br/><br/><b>📌 Maps:</b> <a href='{LINK_MAPS}' target='_blank' style='color:#93C5FD; text-decoration: underline;'>Abrir Localização</a>",
+                    "html": "<b>TSK:</b> {TSK} <br/><b>NE ID:</b> {NE_ID} <br/><b>Quadrante:</b> {QUADRANTE} <br/><b>Status:</b> {STATUS} <br/><br/>📍 <i>Use a tabela abaixo para abrir a rota no Maps!</i>",
                     "style": {"backgroundColor": "#1E293B", "color": "white", "fontSize": "13px"}
                 }
             )
 
             st.pydeck_chart(r_f)
             st.caption("🟠 Laranja: Acionados/Iniciados | 🟢 Verde: Encerrados | 🔵 Azul: Pendentes/Outros")
-            st.info("💡 **Dica:** Utilize os links da coluna 'Abrir Google Maps' na tabela para traçar a rota pro técnico no local.")
+            st.info("💡 **Dica:** Utilize a coluna 'Abrir Google Maps' na tabela logo abaixo para traçar a rota pro técnico no local.")
 
             st.write("")
             st.markdown("### 📋 Tabela de Localização Direta (FMMT)")
